@@ -99,8 +99,10 @@ export function importCanonicalPackage(database, trustedWorkspaceId, encoded, { 
     for (const segment of packageValue.document.segments) {
       const segmentId = id();
       segmentIds.push(segmentId);
-      database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(trustedWorkspaceId, segmentId, sourceRevisionId, segment.kind, `/${segment.order}`, segment.source, digestText(segment.source), segment.order, 1, stableJson(segment.protected));
+      database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)")
+        .run(trustedWorkspaceId, documentId, segmentId, timestamp);
+      database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(trustedWorkspaceId, documentId, sourceRevisionId, segmentId, segment.kind, `/${segment.order}`, segment.source, digestText(segment.source), segment.order, 1, stableJson(segment.protected), "initial");
       database.prepare("INSERT INTO canonical_import_origins VALUES (?, ?, ?, ?, ?, ?)")
         .run(trustedWorkspaceId, segmentId, documentId, sourceRevisionId, packageValue.package_id, segment.segment_ref);
     }

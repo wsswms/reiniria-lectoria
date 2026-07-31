@@ -41,59 +41,76 @@ export class DomainStateService {
     this.id = id;
   }
 
-  create(documentId, content = {}, initialState = "imported") {
+  create(identity, content = {}, initialState = "imported") {
     if (!STATES.includes(initialState)) throw new TypeError("invalid state");
-    this.database.prepare("INSERT INTO working_translations VALUES (?, ?, 0, ?, ?, ?)")
-      .run(this.workspaceId, documentId, initialState, stableJson(content), this.now().toISOString());
-    return this.get(documentId);
+    const workflow = this.#createIdentity(identity);
+    this.database.prepare(`
+      INSERT INTO translation_workflows(
+        workspace_id, workflow_id, document_id, source_revision_id, target_language,
+        version, state, legacy_content_json, origin_type, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+    `).run(
+      this.workspaceId, workflow.workflowId, workflow.documentId,
+      workflow.sourceRevisionId, workflow.targetLanguage, initialState,
+      stableJson(content), workflow.originType, this.now().toISOString(),
+    );
+    return this.get(workflow.workflowId);
   }
 
-  get(documentId) {
-    const row = this.database.prepare("SELECT document_id AS documentId, version, state, content_json AS contentJson FROM working_translations WHERE workspace_id = ? AND document_id = ?")
-      .get(this.workspaceId, documentId);
+  get(selector) {
+    const workflowId = this.#workflowId(selector);
+    const row = this.database.prepare(`
+      SELECT workflow_id AS workflowId, document_id AS documentId,
+             source_revision_id AS sourceRevisionId, target_language AS targetLanguage,
+             version, state, legacy_content_json AS contentJson
+      FROM translation_workflows
+      WHERE workspace_id = ? AND workflow_id = ?
+    `).get(this.workspaceId, workflowId);
     if (!row) throw new StateConflictError("working translation not found");
     return Object.freeze({ ...row, content: JSON.parse(row.contentJson) });
   }
 
-  transition(documentId, expectedVersion, nextState, actorInput) {
+  transition(selector, expectedVersion, nextState, actorInput) {
     const by = actor(actorInput);
-    const current = this.get(documentId);
+    const workflowId = this.#workflowId(selector);
+    const current = this.get(workflowId);
     const permitted = ALLOWED_TRANSITIONS.get(current.state)?.has(nextState) === true;
     const userOnly = ["human-reviewed", "approved-for-export"].includes(nextState);
     if (!permitted || (userOnly && by.type !== "user")) {
-      this.#audit(documentId, "state-transition-rejected", by, false, { from: current.state, to: nextState });
+      this.#audit(workflowId, "state-transition-rejected", by, false, { from: current.state, to: nextState });
       throw new StateConflictError("state transition rejected");
     }
     try {
       return this.database.transaction(() => {
         const changed = this.database.prepare(`
-          UPDATE working_translations SET state = ?, version = version + 1, updated_at = ?
-          WHERE workspace_id = ? AND document_id = ? AND version = ? AND state = ?
-        `).run(nextState, this.now().toISOString(), this.workspaceId, documentId, expectedVersion, current.state).changes;
+          UPDATE translation_workflows SET state = ?, version = version + 1, updated_at = ?
+          WHERE workspace_id = ? AND workflow_id = ? AND version = ? AND state = ?
+        `).run(nextState, this.now().toISOString(), this.workspaceId, workflowId, expectedVersion, current.state).changes;
         if (changed !== 1) throw new StateConflictError();
-        this.#audit(documentId, "state-transition", by, true, { from: current.state, to: nextState });
-        return this.get(documentId);
+        this.#audit(workflowId, "state-transition", by, true, { from: current.state, to: nextState });
+        return this.get(workflowId);
       })();
     } catch (error) {
-      if (error instanceof StateConflictError) this.#audit(documentId, "state-transition-conflict", by, false, { expectedVersion, from: current.state, to: nextState });
+      if (error instanceof StateConflictError) this.#audit(workflowId, "state-transition-conflict", by, false, { expectedVersion, from: current.state, to: nextState });
       throw error;
     }
   }
 
-  updateContent(documentId, expectedVersion, content, actorInput) {
+  updateContent(selector, expectedVersion, content, actorInput) {
     const by = actor(actorInput);
+    const workflowId = this.#workflowId(selector);
     try {
       return this.database.transaction(() => {
         const changed = this.database.prepare(`
-          UPDATE working_translations SET content_json = ?, version = version + 1, updated_at = ?
-          WHERE workspace_id = ? AND document_id = ? AND version = ?
-        `).run(stableJson(content), this.now().toISOString(), this.workspaceId, documentId, expectedVersion).changes;
+          UPDATE translation_workflows SET legacy_content_json = ?, version = version + 1, updated_at = ?
+          WHERE workspace_id = ? AND workflow_id = ? AND version = ?
+        `).run(stableJson(content), this.now().toISOString(), this.workspaceId, workflowId, expectedVersion).changes;
         if (changed !== 1) throw new StateConflictError();
-        this.#audit(documentId, "content-updated", by, true, { expectedVersion });
-        return this.get(documentId);
+        this.#audit(workflowId, "content-updated", by, true, { expectedVersion });
+        return this.get(workflowId);
       })();
     } catch (error) {
-      if (error instanceof StateConflictError) this.#audit(documentId, "content-update-conflict", by, false, { expectedVersion });
+      if (error instanceof StateConflictError) this.#audit(workflowId, "content-update-conflict", by, false, { expectedVersion });
       throw error;
     }
   }
@@ -119,5 +136,27 @@ export class DomainStateService {
   #audit(entityId, action, by, succeeded, details) {
     this.database.prepare("INSERT INTO domain_audit_events(workspace_id, event_id, entity_type, entity_id, action, actor_type, actor_id, succeeded, details_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(this.workspaceId, this.id(), "working-translation", entityId, action, by.type, by.id, succeeded ? 1 : 0, stableJson(details), this.now().toISOString());
+  }
+
+  #createIdentity(identity) {
+    if (typeof identity === "string") {
+      const revisions = this.database.prepare(`
+        SELECT source_revision_id AS sourceRevisionId
+        FROM source_revisions WHERE workspace_id = ? AND document_id = ?
+      `).all(this.workspaceId, identity);
+      if (revisions.length !== 1) throw new StateConflictError("legacy workflow requires exactly one source revision");
+      return { workflowId: identity, documentId: identity, sourceRevisionId: revisions[0].sourceRevisionId, targetLanguage: "und", originType: "legacy" };
+    }
+    if (!identity || typeof identity !== "object") throw new TypeError("workflow identity is required");
+    for (const name of ["workflowId", "documentId", "sourceRevisionId", "targetLanguage"]) {
+      if (typeof identity[name] !== "string" || identity[name].length === 0) throw new TypeError(`${name} is required`);
+    }
+    return { ...identity, originType: "native" };
+  }
+
+  #workflowId(selector) {
+    if (typeof selector === "string" && selector.length > 0) return selector;
+    if (selector && typeof selector.workflowId === "string" && selector.workflowId.length > 0) return selector.workflowId;
+    throw new TypeError("workflowId is required");
   }
 }

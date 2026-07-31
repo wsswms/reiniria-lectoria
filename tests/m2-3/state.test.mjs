@@ -12,6 +12,10 @@ const system = Object.freeze({ type: "system", id: "fixture-system" });
 
 function insertDocument(database, workspaceId, documentId) {
   database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?)").run(workspaceId, documentId, "Fixture", new Date(0).toISOString());
+  const revisionId = randomUUID();
+  database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)")
+    .run(workspaceId, revisionId, documentId, `sha256:${"0".repeat(64)}`, `sha256:${"1".repeat(64)}`, new Date(0).toISOString());
+  return revisionId;
 }
 
 async function withService(prefix, run) {
@@ -104,9 +108,7 @@ test("one hundred duplicate commands create one result and isolate workspace sco
 test("source facts and audit events are append-only", async () => {
   await withService("lectoria-m2-3-immutable-", ({ database, service, workspaceId }) => {
     const documentId = randomUUID();
-    insertDocument(database, workspaceId, documentId);
-    const revisionId = randomUUID();
-    database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(workspaceId, revisionId, documentId, `sha256:${"0".repeat(64)}`, `sha256:${"1".repeat(64)}`, new Date(0).toISOString());
+    const revisionId = insertDocument(database, workspaceId, documentId);
     assert.throws(() => database.prepare("UPDATE source_revisions SET original_digest = ? WHERE workspace_id = ? AND source_revision_id = ?").run(`sha256:${"2".repeat(64)}`, workspaceId, revisionId), /immutable/);
     service.create(documentId, {}, "editing");
     service.transition(documentId, 0, "human-reviewed", user);
@@ -125,9 +127,9 @@ test("database constraints independently reject invalid state values and edges",
       insertDocument(database, workspaceId, documentId);
       service.create(documentId, {}, from);
       if (ALLOWED_TRANSITIONS.get(from).has(to)) {
-        assert.equal(database.prepare("UPDATE working_translations SET state = ? WHERE workspace_id = ? AND document_id = ?").run(to, workspaceId, documentId).changes, 1);
+        assert.equal(database.prepare("UPDATE translation_workflows SET state = ? WHERE workspace_id = ? AND workflow_id = ?").run(to, workspaceId, documentId).changes, 1);
       } else {
-        assert.throws(() => database.prepare("UPDATE working_translations SET state = ? WHERE workspace_id = ? AND document_id = ?").run(to, workspaceId, documentId), /invalid working translation state transition/);
+        assert.throws(() => database.prepare("UPDATE translation_workflows SET state = ? WHERE workspace_id = ? AND workflow_id = ?").run(to, workspaceId, documentId), /invalid translation workflow state transition/);
         assert.equal(service.get(documentId).state, from);
       }
     }

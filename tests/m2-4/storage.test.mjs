@@ -85,7 +85,8 @@ test("derived data rebuilds deterministically from facts without semantic tables
     const segmentId = randomUUID();
     fixture.database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?)").run(fixture.workspaceId, documentId, "Fixture", new Date(0).toISOString());
     fixture.database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(fixture.workspaceId, revisionId, documentId, sha("o"), sha("n"), new Date(0).toISOString());
-    fixture.database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(fixture.workspaceId, segmentId, revisionId, "p", "/0", "text", sha("text"), 0, 1, "[]");
+    fixture.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)").run(fixture.workspaceId, documentId, segmentId, new Date(0).toISOString());
+    fixture.database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(fixture.workspaceId, documentId, revisionId, segmentId, "p", "/0", "text", sha("text"), 0, 1, "[]", "initial");
     const first = await rebuildDerived(fixture.root, fixture.database, fixture.workspaceId);
     await writeFile(join(fixture.root, "derived", "garbage"), "delete me");
     const second = await rebuildDerived(fixture.root, fixture.database, fixture.workspaceId);

@@ -19,19 +19,20 @@ try {
   const source = handles[0];
   source.database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?)").run(source.record.workspaceId, ids.documents, "x", new Date(0).toISOString());
   source.database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(source.record.workspaceId, ids.revisions, ids.documents, sha("o"), sha("n"), new Date(0).toISOString());
-  source.database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(source.record.workspaceId, ids.segments, ids.revisions, "p", "/0", "x", sha("x"), 0, 1, "[]");
+  source.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)").run(source.record.workspaceId, ids.documents, ids.segments, new Date(0).toISOString());
+  source.database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(source.record.workspaceId, ids.documents, ids.revisions, ids.segments, "p", "/0", "x", sha("x"), 0, 1, "[]", "initial");
   for (const name of classes.filter((item) => !["documents", "revisions", "segments"].includes(item))) source.store.put(name, ids[name], "x");
   for (const name of classes) for (let attempt = 0; attempt < 100; attempt += 1) {
     try { handles[1 + (attempt % 2)].store.get(name, ids[name], source.record.workspaceId); }
     catch (error) { if (error instanceof ResourceNotFoundError) rejected += 1; }
   }
   const foreignWorkspace = handles[1].record.workspaceId;
-  for (const table of ["object_records", "documents", "source_revisions", "segments", "task_placeholders", "idempotency_keys", "cache_entries", "derived_indexes", "audit_events"]) {
+  for (const table of ["object_records", "documents", "source_revisions", "document_segments", "task_placeholders", "idempotency_keys", "cache_entries", "derived_indexes", "audit_events"]) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       try {
         if (table === "documents") source.database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), "x", new Date(0).toISOString());
         else if (table === "source_revisions") source.database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), sha("x"), sha("y"), new Date(0).toISOString());
-        else if (table === "segments") source.database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), "p", "/0", "x", sha("x"), 0, 1, "[]");
+        else if (table === "document_segments") source.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), new Date(0).toISOString());
         else source.database.prepare(`INSERT INTO ${table}(workspace_id, resource_id, value) VALUES (?, ?, ?)`).run(foreignWorkspace, randomUUID(), "x");
       } catch (error) {
         if (/FOREIGN KEY/.test(error.message)) databaseRejected += 1;
