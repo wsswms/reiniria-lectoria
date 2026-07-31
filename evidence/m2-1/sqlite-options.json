@@ -1,0 +1,33 @@
+{
+  "environment": {
+    "node": "v22.19.0",
+    "platform": "linux",
+    "arch": "arm64"
+  },
+  "options": [
+    {
+      "name": "better-sqlite3",
+      "version": "13.0.2",
+      "license": "MIT",
+      "stability": "mature external package",
+      "nativeAddon": true,
+      "backupApi": true,
+      "sqliteVersion": "3.53.4",
+      "transaction": true,
+      "foreignKeys": true
+    },
+    {
+      "name": "node:sqlite",
+      "version": "22.19.0",
+      "license": "Node.js runtime",
+      "stability": "experimental in Node 22.19.0",
+      "nativeAddon": false,
+      "backupApi": true,
+      "sqliteVersion": "3.50.4",
+      "transaction": true,
+      "foreignKeys": true
+    }
+  ],
+  "selected": "better-sqlite3@13.0.2",
+  "rationale": "stable public API, explicit version lock, synchronous transaction boundary and backup API; incompatible upstream prebuild is removed and bundled source is compiled in an isolated build stage"
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reiniria.local/schemas/canonical-package-v1.schema.json",
+  "title": "Reiniria Lectoria Canonical Exchange Package v1",
+  "type": "object",
+  "required": ["schema_version", "package_type", "package_id", "created_at", "origin", "document", "integrity"],
+  "properties": {
+    "schema_version": { "type": "string", "pattern": "^1\\.[0-9]+$" },
+    "package_type": { "enum": ["source_document", "translation_bundle"] },
+    "package_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "origin": {
+      "type": "object",
+      "required": ["adapter", "source_digest"],
+      "properties": {
+        "adapter": { "type": "string" },
+        "source_uri": { "type": "string" },
+        "source_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": true
+    },
+    "document": {
+      "type": "object",
+      "required": ["title", "source_language", "metadata", "segments"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "source_language": { "type": "string", "minLength": 1 },
+        "metadata": { "type": "object" },
+        "segments": { "type": "array", "minItems": 1 }
+      },
+      "additionalProperties": true
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["algorithm", "normalization", "package_digest"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "normalization": { "const": "canonical-json-v1" },
+        "package_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

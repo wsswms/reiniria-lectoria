@@ -1,0 +1,23 @@
+{
+  "stage": "M2.3",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "runtime_image": "node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90",
+  "canonical_attempts": 24,
+  "canonical_passed": 24,
+  "canonical_negative_matrix_rejected_percent": 100,
+  "forbidden_export_field_attempts": 100,
+  "forbidden_export_field_leaks": 0,
+  "cross_workspace_import_attempts": 100,
+  "cross_workspace_internal_identity_reuse": 0,
+  "state_matrix_edges": 196,
+  "state_matrix_expected_results": 196,
+  "concurrent_attempts": 100,
+  "concurrent_success": 1,
+  "concurrent_conflicts": 99,
+  "idempotent_attempts": 100,
+  "idempotent_business_results": 1,
+  "fixture_schema_sha256": "f8aef7c6caff825d91f9492ed76a7098e73596e02dcc71bf3fdf0835f54a5b94",
+  "result": "go"
+}

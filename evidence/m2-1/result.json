@@ -1,0 +1,11 @@
+{
+  "stage": "M2.1",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "initialization_attempts": 20,
+  "initialization_passed": 20,
+  "foreign_key_violation_attempts": 20,
+  "foreign_key_violations_rejected": 20,
+  "selected_driver": "better-sqlite3@13.0.2"
+}
