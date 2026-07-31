@@ -1,0 +1,6 @@
+{
+  "format": "lectoria-m3-2-corpus-v1",
+  "valid_fixtures": 36,
+  "negative_fixtures": 12,
+  "source_sha256": "20ba2dc2935e1bd48f960ab8451628505c43fcd3a8dd16d74991be5fb49799c0"
+}

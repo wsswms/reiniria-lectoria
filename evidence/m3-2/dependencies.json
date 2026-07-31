@@ -1,0 +1,21 @@
+{
+  "reviewed_at": "2026-08-01",
+  "registry": "https://registry.npmjs.org/",
+  "install_mode": "npm ci --ignore-scripts with better-sqlite3 controlled source build",
+  "direct_parser_dependencies": [
+    { "name": "unified", "version": "11.0.5", "license": "MIT", "install_script": false },
+    { "name": "remark-parse", "version": "11.0.0", "license": "MIT", "install_script": false },
+    { "name": "remark-gfm", "version": "4.0.1", "license": "MIT", "install_script": false },
+    { "name": "remark-frontmatter", "version": "5.0.0", "license": "MIT", "install_script": false },
+    { "name": "remark-stringify", "version": "11.0.0", "license": "MIT", "install_script": false },
+    { "name": "rehype-parse", "version": "9.0.1", "license": "MIT", "install_script": false },
+    { "name": "rehype-stringify", "version": "10.0.1", "license": "MIT", "install_script": false },
+    { "name": "rehype-sanitize", "version": "6.0.0", "license": "MIT", "install_script": false }
+  ],
+  "transitive_component_count": 101,
+  "transitive_licenses": ["BSD-2-Clause", "ISC", "MIT"],
+  "npm_audit_vulnerabilities": 0,
+  "package_lock_sha256": "c4437ce396272811aaaca261be5b82a06d2bc70a458d1560e4e1ab17383a73ff",
+  "sbom": "sbom.cdx.json",
+  "result": "accepted"
+}

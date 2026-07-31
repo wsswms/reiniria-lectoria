@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -604,6 +604,77 @@ export const MIGRATIONS = Object.freeze([
       DROP TABLE segments;
       DROP TABLE working_translations;
       DROP TABLE migration_6_guard;
+    `,
+  }),
+  Object.freeze({
+    version: 7,
+    name: "safe-document-imports",
+    sql: `
+      CREATE TABLE document_imports (
+        workspace_id TEXT NOT NULL,
+        import_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        format TEXT NOT NULL CHECK(format IN ('markdown', 'html', 'text')),
+        raw_object_id TEXT NOT NULL,
+        raw_digest TEXT NOT NULL,
+        normalized_text TEXT NOT NULL,
+        normalized_digest TEXT NOT NULL,
+        projection_json TEXT NOT NULL CHECK(json_valid(projection_json)),
+        projection_digest TEXT NOT NULL,
+        parser_version TEXT NOT NULL,
+        sanitizer_version TEXT NOT NULL,
+        requires_confirmation INTEGER NOT NULL CHECK(requires_confirmation IN (0, 1)),
+        imported_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, import_id),
+        UNIQUE (workspace_id, source_revision_id),
+        FOREIGN KEY (workspace_id, document_id, source_revision_id)
+          REFERENCES source_revisions(workspace_id, document_id, source_revision_id),
+        FOREIGN KEY (workspace_id, raw_object_id)
+          REFERENCES committed_objects(workspace_id, object_id)
+      ) STRICT;
+
+      CREATE TABLE import_diagnostics (
+        workspace_id TEXT NOT NULL,
+        import_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK(sequence >= 0),
+        code TEXT NOT NULL,
+        path_json TEXT NOT NULL CHECK(json_valid(path_json)),
+        detail TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, import_id, sequence),
+        FOREIGN KEY (workspace_id, import_id)
+          REFERENCES document_imports(workspace_id, import_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE import_confirmations (
+        workspace_id TEXT NOT NULL,
+        import_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, import_id),
+        FOREIGN KEY (workspace_id, import_id)
+          REFERENCES document_imports(workspace_id, import_id)
+      ) STRICT;
+
+      CREATE TRIGGER document_imports_no_update
+      BEFORE UPDATE ON document_imports
+      BEGIN SELECT RAISE(ABORT, 'document import is immutable'); END;
+      CREATE TRIGGER document_imports_no_delete
+      BEFORE DELETE ON document_imports
+      BEGIN SELECT RAISE(ABORT, 'document import is immutable'); END;
+      CREATE TRIGGER import_diagnostics_no_update
+      BEFORE UPDATE ON import_diagnostics
+      BEGIN SELECT RAISE(ABORT, 'import diagnostic is immutable'); END;
+      CREATE TRIGGER import_diagnostics_no_delete
+      BEFORE DELETE ON import_diagnostics
+      BEGIN SELECT RAISE(ABORT, 'import diagnostic is immutable'); END;
+      CREATE TRIGGER import_confirmations_no_update
+      BEFORE UPDATE ON import_confirmations
+      BEGIN SELECT RAISE(ABORT, 'import confirmation is immutable'); END;
+      CREATE TRIGGER import_confirmations_no_delete
+      BEFORE DELETE ON import_confirmations
+      BEGIN SELECT RAISE(ABORT, 'import confirmation is immutable'); END;
     `,
   }),
 ]);

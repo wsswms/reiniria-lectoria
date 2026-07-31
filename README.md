@@ -13,6 +13,7 @@ DOCKER_BIN=/path/to/docker ./scripts/test-m2-3.sh
 DOCKER_BIN=/path/to/docker GIT_BIN=/path/to/git ./scripts/test-m2-4.sh
 DOCKER_BIN=/path/to/docker ./scripts/test-m2-5.sh
 DOCKER_BIN=/path/to/docker ./scripts/test-m3-1.sh
+DOCKER_BIN=/path/to/docker ./scripts/test-m3-2.sh
 ```
 
 该入口不调用模型或外部内容 API，运行时使用只读根文件系统、无网络、无额外 capabilities，并把测试数据库限制在临时内存文件系统。
