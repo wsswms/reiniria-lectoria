@@ -20,5 +20,6 @@ COPY package.json package-lock.json ./
 COPY src ./src
 COPY tests ./tests
 COPY scripts ./scripts
+COPY schemas ./schemas
 
 CMD ["npm", "test"]

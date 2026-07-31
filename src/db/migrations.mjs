@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -111,6 +111,116 @@ export const MIGRATIONS = Object.freeze([
         FOREIGN KEY (workspace_id)
           REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
       ) STRICT;
+    `,
+  }),
+  Object.freeze({
+    version: 3,
+    name: "canonical-state-concurrency-idempotency",
+    sql: `
+      CREATE TRIGGER source_revisions_no_update
+      BEFORE UPDATE ON source_revisions
+      BEGIN SELECT RAISE(ABORT, 'source revision is immutable'); END;
+
+      CREATE TRIGGER source_revisions_no_delete
+      BEFORE DELETE ON source_revisions
+      BEGIN SELECT RAISE(ABORT, 'source revision is immutable'); END;
+
+      CREATE TRIGGER segments_no_update
+      BEFORE UPDATE ON segments
+      BEGIN SELECT RAISE(ABORT, 'segment is immutable'); END;
+
+      CREATE TRIGGER segments_no_delete
+      BEFORE DELETE ON segments
+      BEGIN SELECT RAISE(ABORT, 'segment is immutable'); END;
+
+      CREATE TABLE canonical_import_origins (
+        workspace_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        origin_package_id TEXT NOT NULL,
+        origin_segment_ref TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, segment_id),
+        UNIQUE (workspace_id, origin_package_id, origin_segment_ref),
+        FOREIGN KEY (workspace_id, document_id)
+          REFERENCES documents(workspace_id, document_id),
+        FOREIGN KEY (workspace_id, source_revision_id)
+          REFERENCES source_revisions(workspace_id, source_revision_id),
+        FOREIGN KEY (workspace_id, segment_id)
+          REFERENCES segments(workspace_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE working_translations (
+        workspace_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN (
+          'imported', 'extraction-pending', 'source-confirmed', 'queued', 'generating',
+          'draft-machine', 'candidate-invalid', 'candidate-valid', 'editing', 'human-reviewed',
+          'approved-for-export', 'exported', 'stale', 'rejected'
+        )),
+        content_json TEXT NOT NULL CHECK(json_valid(content_json)),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, document_id),
+        FOREIGN KEY (workspace_id, document_id)
+          REFERENCES documents(workspace_id, document_id)
+      ) STRICT;
+
+      CREATE TRIGGER working_translations_state_guard
+      BEFORE UPDATE OF state ON working_translations
+      WHEN (OLD.state || '->' || NEW.state) NOT IN (
+        'imported->extraction-pending', 'imported->source-confirmed', 'imported->rejected',
+        'extraction-pending->source-confirmed', 'extraction-pending->rejected',
+        'source-confirmed->queued', 'source-confirmed->stale', 'source-confirmed->rejected',
+        'queued->generating', 'queued->rejected',
+        'generating->draft-machine', 'generating->candidate-invalid', 'generating->candidate-valid', 'generating->rejected',
+        'draft-machine->candidate-invalid', 'draft-machine->candidate-valid', 'draft-machine->rejected',
+        'candidate-invalid->queued', 'candidate-invalid->rejected',
+        'candidate-valid->editing', 'candidate-valid->stale', 'candidate-valid->rejected',
+        'editing->human-reviewed', 'editing->stale', 'editing->rejected',
+        'human-reviewed->approved-for-export', 'human-reviewed->stale', 'human-reviewed->rejected',
+        'approved-for-export->exported', 'approved-for-export->stale',
+        'exported->stale',
+        'stale->queued', 'stale->human-reviewed', 'stale->rejected',
+        'rejected->queued'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid working translation state transition'); END;
+
+      CREATE TABLE command_idempotency (
+        workspace_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_digest TEXT NOT NULL,
+        result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, operation, idempotency_key),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE domain_audit_events (
+        workspace_id TEXT NOT NULL,
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        succeeded INTEGER NOT NULL CHECK(succeeded IN (0, 1)),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json)),
+        occurred_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TRIGGER domain_audit_events_no_update
+      BEFORE UPDATE ON domain_audit_events
+      BEGIN SELECT RAISE(ABORT, 'domain audit is append-only'); END;
+
+      CREATE TRIGGER domain_audit_events_no_delete
+      BEFORE DELETE ON domain_audit_events
+      BEGIN SELECT RAISE(ABORT, 'domain audit is append-only'); END;
     `,
   }),
 ]);

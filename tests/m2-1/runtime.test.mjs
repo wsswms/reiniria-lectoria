@@ -29,7 +29,7 @@ test("twenty clean linux database lifecycles migrate, transact, roll back and re
     try {
       let database = openWorkspaceDatabase(filename, { workspaceId: ids.workspace, now: () => new Date(0) });
       const diagnostics = assertDatabaseIntegrity(database);
-      assert.equal(diagnostics.schemaVersion, 2);
+      assert.equal(diagnostics.schemaVersion, 3);
       assert.equal(diagnostics.foreignKeys, true);
       assert.equal(diagnostics.journalMode, "wal");
 
