@@ -1,0 +1,24 @@
+{
+  "stage": "M1.2",
+  "corpus": {
+    "fixtures": 24,
+    "markdown": 18,
+    "html": 6,
+    "sha256": "6eadcb8c597785ea72d4274c41e96a69b9d3d689deba6851311382251d187b32",
+    "derived_update_scenarios": 168
+  },
+  "round_trip": {
+    "passed": 24,
+    "failed": 0
+  },
+  "protection": {
+    "passed": 24,
+    "failed": 0
+  },
+  "alignment": {
+    "unchanged_reuse_rate": 1,
+    "mild_rewrite_reuse_rate": 1,
+    "ambiguity_detection_rate": 1,
+    "wrong_reuse": 0
+  }
+}

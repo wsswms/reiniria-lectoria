@@ -16,3 +16,11 @@ DOCKER_BIN=/path/to/docker ./scripts/test-m1-1.sh
 ```
 
 脚本以非 root、只读根文件系统、`tmpfs /tmp`、无 Linux capabilities、无新增权限和无网络运行测试镜像。它不会使用本机 Node.js。
+
+## M1.2 运行
+
+```sh
+DOCKER_BIN=/path/to/docker ./scripts/test-m1-2.sh
+```
+
+M1.2 使用 18 个 Markdown 与 6 个 HTML 自建 fixture，验证关键 AST 结构 round-trip、保护项严格恢复，以及插入、删除、移动、格式变化、轻微改写、拆分和合并七类 segment 更新。
