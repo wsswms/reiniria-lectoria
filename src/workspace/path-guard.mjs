@@ -66,6 +66,25 @@ export async function resolveWorkspaceFile(root, input, { mustExist = true } = {
   return candidate;
 }
 
+export async function ensureWorkspaceDirectory(root, input) {
+  const parts = validateRelativeWorkspacePath(input);
+  const canonicalRoot = await realpath(root);
+  let cursor = canonicalRoot;
+  for (const part of parts) {
+    cursor = resolve(cursor, part);
+    assertContained(canonicalRoot, cursor);
+    try {
+      const info = await lstat(cursor);
+      if (info.isSymbolicLink() || !info.isDirectory()) reject();
+    } catch (error) {
+      if (error instanceof InvalidWorkspacePathError) throw error;
+      if (error?.code !== "ENOENT") throw error;
+      await mkdir(cursor);
+    }
+  }
+  return cursor;
+}
+
 export async function writeWorkspaceFile(root, input, content) {
   const parts = validateRelativeWorkspacePath(input);
   if (parts.length < 2) reject();

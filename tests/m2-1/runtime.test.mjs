@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { assertDatabaseIntegrity, databaseDiagnostics, openWorkspaceDatabase } from "../../src/db/connection.mjs";
+import { CURRENT_SCHEMA_VERSION } from "../../src/db/migrations.mjs";
 import { documentContract, segmentContract, sourceRevisionContract, stableJson, workspaceContract } from "../../src/domain/contracts.mjs";
 
 function sha(value) {
@@ -29,7 +30,7 @@ test("twenty clean linux database lifecycles migrate, transact, roll back and re
     try {
       let database = openWorkspaceDatabase(filename, { workspaceId: ids.workspace, now: () => new Date(0) });
       const diagnostics = assertDatabaseIntegrity(database);
-      assert.equal(diagnostics.schemaVersion, 3);
+      assert.equal(diagnostics.schemaVersion, CURRENT_SCHEMA_VERSION);
       assert.equal(diagnostics.foreignKeys, true);
       assert.equal(diagnostics.journalMode, "wal");
 

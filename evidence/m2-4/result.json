@@ -1,0 +1,23 @@
+{
+  "stage": "M2.4",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "runtime_image": "node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90",
+  "object_fault_cut_points": 4,
+  "attempts_per_cut_point": 10,
+  "fault_attempts_converged": 40,
+  "dangling_committed_facts": 0,
+  "corrupt_object_attempts": 100,
+  "corrupt_objects_diagnosed": 100,
+  "secret_canary_leaks": 0,
+  "derived_rebuild_deterministic": true,
+  "embedding_rerank_artifacts": 0,
+  "staging_failed_overwrites": 0,
+  "git_policy_fixtures": 3,
+  "forbidden_git_paths_tracked": 0,
+  "application_git_subprocesses": 0,
+  "with_without_git_results_equal": true,
+  "fixture_sha256": "09dc5421b1865291e3a7c1116f037e064b7973d86fb5a0860d5798bac8b8e75d",
+  "result": "go"
+}

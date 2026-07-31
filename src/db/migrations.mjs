@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -221,6 +221,32 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER domain_audit_events_no_delete
       BEFORE DELETE ON domain_audit_events
       BEGIN SELECT RAISE(ABORT, 'domain audit is append-only'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 4,
+    name: "layered-storage-manifests",
+    sql: `
+      CREATE TABLE committed_objects (
+        workspace_id TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+        relative_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, object_id),
+        UNIQUE (workspace_id, digest),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TRIGGER committed_objects_no_update
+      BEFORE UPDATE ON committed_objects
+      BEGIN SELECT RAISE(ABORT, 'committed object is immutable'); END;
+
+      CREATE TRIGGER committed_objects_no_delete
+      BEFORE DELETE ON committed_objects
+      BEGIN SELECT RAISE(ABORT, 'committed object is immutable'); END;
     `,
   }),
 ]);
