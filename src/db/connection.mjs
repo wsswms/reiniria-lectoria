@@ -18,6 +18,12 @@ export function openWorkspaceDatabase(filename, { workspaceId, now = () => new D
       throw new Error("workspace database identity mismatch");
     }
 
+    database.prepare(`
+      INSERT INTO workspace_summary(workspace_id, document_count, rebuilt_at)
+      SELECT ?, (SELECT count(*) FROM documents WHERE workspace_id = ?), ?
+      WHERE NOT EXISTS (SELECT 1 FROM workspace_summary WHERE workspace_id = ?)
+    `).run(workspaceId, workspaceId, new Date(0).toISOString(), workspaceId);
+
     return database;
   } catch (error) {
     database.close();

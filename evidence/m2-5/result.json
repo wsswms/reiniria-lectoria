@@ -1,0 +1,22 @@
+{
+  "stage": "M2.5",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "historical_schema_fixtures": 2,
+  "migration_attempts_per_fixture": 10,
+  "historical_migrations_passed": 20,
+  "migration_fault_cut_points": 3,
+  "attempts_per_migration_cut_point": 10,
+  "migration_fault_attempts_converged": 30,
+  "workspace_backup_restore_attempts": 30,
+  "workspace_backup_restore_passed": 30,
+  "wal_integrity_failures": 0,
+  "corruption_classes": 6,
+  "corrupt_backups_activated": 0,
+  "identity_conflicts_overwritten": 0,
+  "root_conflicts_overwritten": 0,
+  "derived_required_in_backup": false,
+  "fixture_sha256": "ae7cdc45aa05453c7a414936dca81fbd4f9eb69eb9fef9c63280391565d04f97",
+  "result": "go"
+}

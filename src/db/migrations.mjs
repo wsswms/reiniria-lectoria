@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -249,6 +249,25 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'committed object is immutable'); END;
     `,
   }),
+  Object.freeze({
+    version: 5,
+    name: "workspace-summary-data-transform",
+    sql: `
+      CREATE TABLE workspace_summary (
+        workspace_id TEXT PRIMARY KEY,
+        document_count INTEGER NOT NULL CHECK(document_count >= 0),
+        rebuilt_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      INSERT INTO workspace_summary(workspace_id, document_count, rebuilt_at)
+      SELECT workspace_id,
+             (SELECT count(*) FROM documents WHERE documents.workspace_id = workspace_meta.workspace_id),
+             '1970-01-01T00:00:00.000Z'
+      FROM workspace_meta;
+    `,
+  }),
 ]);
 
 export function migrationChecksum(migration) {
@@ -257,7 +276,7 @@ export function migrationChecksum(migration) {
     .digest("hex");
 }
 
-export function applyMigrations(database) {
+export function applyMigrations(database, { inject = () => {} } = {}) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -282,8 +301,10 @@ export function applyMigrations(database) {
 
   for (const migration of MIGRATIONS) {
     if (existing.has(migration.version)) continue;
+    inject(`before-migration-${migration.version}`);
     const apply = database.transaction(() => {
       database.exec(migration.sql);
+      inject(`after-sql-${migration.version}`);
       database.prepare(`
         INSERT INTO schema_migrations(version, name, checksum, applied_at)
         VALUES (?, ?, ?, ?)
@@ -296,6 +317,7 @@ export function applyMigrations(database) {
       database.pragma(`user_version = ${migration.version}`);
     });
     apply();
+    inject(`after-commit-${migration.version}`);
   }
 
   const userVersion = database.pragma("user_version", { simple: true });
