@@ -3,6 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { WorkflowApi } from "../../src/application/workflow-api.mjs";
+import { runWorkflowCli } from "../../src/cli/workflow-cli.mjs";
+import { ReimportService } from "../../src/document/reimport-service.mjs";
 import { ExportService } from "../../src/export/export-service.mjs";
 import { normalizeDocument } from "../../src/document/parser.mjs";
 import { createWorkspaceBackup, restoreWorkspaceBackup } from "../../src/storage/backup.mjs";
@@ -14,6 +17,80 @@ import { validFixtures } from "../fixtures/m3-2/corpus.mjs";
 import { createEditableWorkflow, seedWorkingCopies, workspace } from "../m3-4/helpers.mjs";
 import { createExportable } from "./helpers.mjs";
 
+const markerPattern = /(⟦LCT-P-\d{4}-[0-9a-f]{16}⟧)/g;
+const exactMarkerPattern = /^⟦LCT-P-\d{4}-[0-9a-f]{16}⟧$/;
+
+function translatedText(segment) {
+  return segment.sourceText.split(markerPattern).map((part) => exactMarkerPattern.test(part)
+    ? part
+    : part.replace(/\p{L}/gu, "x")).join("");
+}
+
+test("the local CLI entry completes markdown, HTML and text workflows through one application API", async () => {
+  const fixture = await workspace("lectoria-m3-5-cli-e2e-");
+  try {
+    const exports = new ExportService({
+      database: fixture.database, root: fixture.root, trustedWorkspaceId: fixture.workspaceId,
+      workCopies: fixture.workCopies, validation: fixture.validation, now: () => new Date(0),
+    });
+    const api = new WorkflowApi({
+      imports: fixture.imports,
+      reimports: new ReimportService({ database: fixture.database, root: fixture.root, trustedWorkspaceId: fixture.workspaceId, now: () => new Date(0) }),
+      states: fixture.states,
+      workCopies: fixture.workCopies,
+      validation: fixture.validation,
+      reviews: fixture.reviews,
+      exports,
+    });
+    const sources = [
+      { format: "markdown", title: "CLI Markdown", content: "# Guide\n\nRead [manual](https://example.com/manual)." },
+      { format: "html", title: "CLI HTML", content: "<article><h1>Guide</h1><p>Read <a href=\"https://example.com/manual\">manual</a>.</p></article>" },
+      { format: "text", title: "CLI Text", content: "First paragraph.\n\nSecond paragraph." },
+    ];
+    for (const source of sources) {
+      const imported = await runWorkflowCli(api, ["document:import", JSON.stringify(source)]);
+      runWorkflowCli(api, ["document:confirm", JSON.stringify({ importId: imported.importId, actor: { type: "user", id: "owner" } })]);
+      const workflowId = crypto.randomUUID();
+      runWorkflowCli(api, ["workflow:create", JSON.stringify({ importId: imported.importId, workflowId, targetLanguage: "fr" })]);
+      const bundle = runWorkflowCli(api, ["working-copy:get", JSON.stringify({ workflowId })]);
+      for (const segment of bundle.segments) {
+        const candidateText = translatedText(segment);
+        const candidate = runWorkflowCli(api, ["candidate:add", JSON.stringify({
+          workflowId, segmentId: segment.segmentId, text: candidateText, actor: { type: "user", id: "writer" },
+        })]);
+        const selected = runWorkflowCli(api, ["candidate:select", JSON.stringify({
+          workflowId, segmentId: segment.segmentId, candidateId: candidate.candidateId,
+          expectedHeadVersion: null, actor: { type: "user", id: "writer" },
+        })]);
+        runWorkflowCli(api, ["working-copy:edit", JSON.stringify({
+          workflowId, segmentId: segment.segmentId, expectedHeadVersion: selected.version,
+          text: candidateText.replace("x", "y"), actor: { type: "user", id: "writer" },
+        })]);
+      }
+      const run = runWorkflowCli(api, ["validate", JSON.stringify({ workflowId })]);
+      for (const warning of run.findings.filter((item) => item.severity === "warning")) {
+        runWorkflowCli(api, ["warning:confirm", JSON.stringify({
+          workflowId, validationRunId: run.validationRunId, findingId: warning.findingId,
+          actor: { type: "user", id: "reviewer" },
+        })]);
+      }
+      runWorkflowCli(api, ["review", JSON.stringify({
+        workflowId, validationRunId: run.validationRunId, expectedWorkflowVersion: 0,
+        actor: { type: "user", id: "reviewer" },
+      })]);
+      runWorkflowCli(api, ["approve", JSON.stringify({
+        workflowId, validationRunId: run.validationRunId, expectedWorkflowVersion: 1,
+        actor: { type: "user", id: "approver" },
+      })]);
+      const ordinary = await runWorkflowCli(api, ["export", JSON.stringify({ workflowId, validationRunId: run.validationRunId, format: source.format })]);
+      const canonical = await runWorkflowCli(api, ["export", JSON.stringify({ workflowId, validationRunId: run.validationRunId, format: "canonical" })]);
+      assert.equal(ordinary.manifest.artifact_format, source.format);
+      assert.equal(canonical.manifest.artifact_format, "canonical");
+      assert.equal(runWorkflowCli(api, ["workflow:get", JSON.stringify({ workflowId })]).state, "exported");
+    }
+  } finally { await fixture.close(); }
+});
+
 test("twelve documents complete ten offline import-edit-review-export rounds", async () => {
   const selected = ["markdown", "html", "text"].flatMap((format) => validFixtures.filter((item) => item.format === format).slice(0, 4));
   assert.equal(selected.length, 12);
@@ -21,13 +98,16 @@ test("twelve documents complete ten offline import-edit-review-export rounds", a
   let completed = 0;
   try {
     for (const source of selected) for (let round = 0; round < 10; round += 1) {
-      const prepared = await createExportable(fixture, { ...source, id: `${source.id}-${round}` });
+      const prepared = await createExportable(fixture, { ...source, id: `${source.id}-${round}` }, translatedText);
       const ordinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format);
       const canonical = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "canonical");
-      assert.equal(ordinary.content.toString("utf8"), normalizeDocument(source.format, source.content).normalized);
+      const reparsed = normalizeDocument(source.format, ordinary.content);
+      const bundle = fixture.workCopies.getBundle(prepared.workflow.workflowId);
+      assert.deepEqual(reparsed.segments.map((segment) => segment.sourceText), bundle.segments.map((segment) => segment.text));
       assert.equal(canonical.manifest.source_revision_id, prepared.workflow.sourceRevisionId);
       assert.equal(fixture.states.get(prepared.workflow.workflowId).state, "exported");
       assert.equal(fixture.database.prepare("SELECT count(*) AS total FROM export_records WHERE workflow_id = ?").get(prepared.workflow.workflowId).total, 2);
+      assert.equal(fixture.database.prepare("SELECT count(*) AS total FROM working_copy_revisions WHERE workflow_id = ?").get(prepared.workflow.workflowId).total, prepared.workflow.segments.length * 2);
       completed += 1;
     }
     assert.equal(completed, 120);

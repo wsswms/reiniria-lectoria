@@ -54,13 +54,14 @@ test("twelve invalid or dangerous fixtures fail closed or require confirmation",
   }
 });
 
-test("protected values cannot be removed, duplicated, changed or forged", () => {
+test("protected values cannot be removed, duplicated, changed, reordered or forged", () => {
   const parsed = normalizeDocument("markdown", "Keep `code` and [target](https://example.com/path).");
   const segment = parsed.segments[0];
   assert.equal(segment.protected.length, 2);
   assert.equal(validateProtectedText(segment.sourceText, segment.protected), true);
   assert.throws(() => validateProtectedText(segment.sourceText.replace(segment.protected[0].marker, ""), segment.protected), /count/);
   assert.throws(() => validateProtectedText(`${segment.sourceText}${segment.protected[0].marker}`, segment.protected), /count|duplicated/);
+  assert.throws(() => validateProtectedText(segment.sourceText.replace(segment.protected[0].marker, "TEMP").replace(segment.protected[1].marker, segment.protected[0].marker).replace("TEMP", segment.protected[1].marker), segment.protected), /order/);
   assert.throws(() => validateProtectedText(segment.sourceText.replace(/[0-9a-f]{16}/, "0000000000000000"), segment.protected), /unknown|missing|count/);
   assert.throws(() => validateProtectedText(`${segment.sourceText}⟦LCT-P-9999-0000000000000000⟧`, segment.protected), /count|unknown/);
 });

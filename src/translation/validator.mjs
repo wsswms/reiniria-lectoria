@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { stableJson } from "../domain/contracts.mjs";
 import { PARSER_VERSION, validateProtectedText } from "../document/parser.mjs";
+import { serializeOrdinaryDocument, verifyOrdinaryDocument } from "../export/serializer.mjs";
 import { WorkCopyConflictError, WorkCopyService } from "./work-copy-service.mjs";
 
-export const VALIDATOR_VERSION = "lectoria-validator-v1";
+export const VALIDATOR_VERSION = "lectoria-validator-v2";
 
 export class ValidationConflictError extends Error {
   constructor(message = "validation conflict") {
@@ -100,7 +101,20 @@ export class ValidationService {
         kind: segment.kind,
         text: segment.text,
       }));
-    const findings = validateTranslationInput({ workflow: bundle.workflow, sourceSegments: bundle.segments, translations });
+    const findings = [...validateTranslationInput({ workflow: bundle.workflow, sourceSegments: bundle.segments, translations })];
+    if (!findings.some((item) => item.severity === "error")) {
+      const source = this.database.prepare(`
+        SELECT format, normalized_text AS normalizedSource
+        FROM document_imports WHERE workspace_id = ? AND source_revision_id = ?
+      `).get(this.workspaceId, bundle.workflow.sourceRevisionId);
+      try {
+        if (!source) throw new Error("source import not found");
+        const content = serializeOrdinaryDocument(source.format, source.normalizedSource, bundle.segments);
+        verifyOrdinaryDocument(source.format, content, bundle.segments, source.normalizedSource);
+      } catch (error) {
+        findings.push(finding("error", "SERIALIZATION_STRUCTURE_MISMATCH", null, { reason: error.code ?? "SERIALIZATION_ERROR" }));
+      }
+    }
     const validationRunId = this.id();
     const timestamp = this.now().toISOString();
     this.database.transaction(() => {

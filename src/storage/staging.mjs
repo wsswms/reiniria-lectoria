@@ -1,8 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureWorkspaceDirectory, validateRelativeWorkspacePath } from "../workspace/path-guard.mjs";
+import { ensureWorkspaceDirectory, resolveWorkspaceFile, validateRelativeWorkspacePath } from "../workspace/path-guard.mjs";
+
+async function readRegularFileNoFollow(root, relativeName) {
+  const filename = await resolveWorkspaceFile(root, relativeName);
+  const handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new TypeError("staged artifact must be a regular file");
+    return await handle.readFile();
+  } finally { await handle.close(); }
+}
+
+export async function readStagedFile(root, relativeName) {
+  const parts = validateRelativeWorkspacePath(relativeName);
+  if (parts[0] !== "staging" || parts.length < 3) throw new TypeError("staged artifact path is invalid");
+  return readRegularFileNoFollow(root, parts.join("/"));
+}
 
 export async function stageAtomicOutput(root, relativeName, content, { inject = () => {} } = {}) {
   const parts = validateRelativeWorkspacePath(relativeName);
@@ -48,8 +64,13 @@ export async function stageAtomicDirectory(root, relativeDirectory, files, { inj
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
     if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") throw error;
+    const targetInfo = await lstat(target).catch(() => null);
+    if (!targetInfo?.isDirectory() || targetInfo.isSymbolicLink()) throw error;
+    const expectedNames = Object.keys(files).sort();
+    const existingNames = (await readdir(target)).sort();
+    if (JSON.stringify(existingNames) !== JSON.stringify(expectedNames)) throw error;
     for (const [name, content] of Object.entries(files)) {
-      const existing = await readFile(join(target, name)).catch(() => null);
+      const existing = await readRegularFileNoFollow(root, ["staging", ...parts, name].join("/")).catch(() => null);
       if (!existing || !Buffer.from(existing).equals(Buffer.from(content))) throw error;
     }
     return target;

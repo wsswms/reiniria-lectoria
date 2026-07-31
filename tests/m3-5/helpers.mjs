@@ -15,7 +15,10 @@ export async function createExportable(fixture, source, transform = (segment) =>
     FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? ORDER BY ordinal
   `).all(fixture.workspaceId, imported.sourceRevisionId).map((row) => ({ ...row, protected: JSON.parse(row.protectedJson) }));
   const workflow = { ...imported, workflowId, targetLanguage: "fr", segments };
-  seedWorkingCopies(fixture, workflow, transform);
+  const heads = seedWorkingCopies(fixture, workflow);
+  segments.forEach((segment, index) => {
+    fixture.workCopies.edit(workflowId, segment.segmentId, heads[index].version, transform(segment), { type: "user", id: "writer" });
+  });
   const run = fixture.validation.run(workflowId);
   for (const warning of run.findings.filter((item) => item.severity === "warning")) {
     fixture.reviews.confirmWarning(workflowId, run.validationRunId, warning.findingId, { type: "user", id: "reviewer" });

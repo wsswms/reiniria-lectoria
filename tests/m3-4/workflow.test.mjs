@@ -5,6 +5,16 @@ import { ValidationService } from "../../src/translation/validator.mjs";
 import { WorkCopyConflictError, WorkCopyService } from "../../src/translation/work-copy-service.mjs";
 import { createEditableWorkflow, seedWorkingCopies, workspace } from "./helpers.mjs";
 
+const markerPattern = /(⟦LCT-P-\d{4}-[0-9a-f]{16}⟧)/g;
+const exactMarkerPattern = /^⟦LCT-P-\d{4}-[0-9a-f]{16}⟧$/;
+
+function translatedWithChangedValues(segment) {
+  return segment.sourceText.split(markerPattern).map((part) => exactMarkerPattern.test(part)
+    ? part
+    : part.replace(/\d{4}-\d{2}-\d{2}|\d+(?:[.,]\d+)?\s*(?:kg|g|km|cm|mm|°c|%|usd|eur)|\d+(?:[.,]\d+)?/gi, "valeur")
+      .replace(/\p{L}/gu, "x")).join("");
+}
+
 test("candidates are immutable and every selection or edit appends explicit history", async () => {
   const fixture = await workspace("lectoria-m3-4-candidate-");
   try {
@@ -58,10 +68,7 @@ test("validation warnings require confirmation and only users can review or appr
   const fixture = await workspace("lectoria-m3-4-review-");
   try {
     const workflow = await createEditableWorkflow(fixture);
-    seedWorkingCopies(fixture, workflow, (segment) => {
-      const markers = segment.protected.map((item) => item.marker).join(" ");
-      return markers ? `Texte traduit ${markers}` : `Texte traduit ${segment.ordinal}`;
-    });
+    seedWorkingCopies(fixture, workflow, translatedWithChangedValues);
     const run = fixture.validation.run(workflow.workflowId);
     assert.equal(run.current, true);
     assert.equal(run.findings.some((item) => item.severity === "error"), false);
@@ -85,6 +92,17 @@ test("validation warnings require confirmation and only users can review or appr
     assert.equal(fixture.database.prepare("SELECT count(*) AS total FROM domain_audit_events WHERE entity_id = ? AND succeeded = 0 AND action IN ('human-reviewed-rejected', 'approved-for-export-rejected')").get(workflow.workflowId).total, 200);
     const candidate = fixture.workCopies.listCandidates(workflow.workflowId, workflow.segments[0].segmentId)[0];
     assert.throws(() => fixture.workCopies.selectCandidate(workflow.workflowId, workflow.segments[0].segmentId, candidate.candidateId, 0, { type: "user", id: "writer" }), /reviewed or terminal/);
+  } finally { await fixture.close(); }
+});
+
+test("validator rejects target text that cannot preserve the ordinary document structure", async () => {
+  const fixture = await workspace("lectoria-m3-4-serialization-structure-");
+  try {
+    const workflow = await createEditableWorkflow(fixture, { content: "One paragraph." });
+    seedWorkingCopies(fixture, workflow, () => "First paragraph.\n\nInjected paragraph.");
+    const run = fixture.validation.run(workflow.workflowId);
+    assert.ok(run.findings.some((item) => item.severity === "error" && item.code === "SERIALIZATION_STRUCTURE_MISMATCH"));
+    assert.throws(() => fixture.reviews.humanReview(workflow.workflowId, run.validationRunId, 0, { type: "user", id: "reviewer" }), /errors/);
   } finally { await fixture.close(); }
 });
 

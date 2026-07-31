@@ -314,5 +314,6 @@ export function validateProtectedText(text, protectedItems) {
     if (markers.filter((candidate) => candidate === marker).length !== 1) throw new DocumentParseError("PROTECTION_TOKEN_DUPLICATE", "protected token missing or duplicated");
   }
   if (markers.some((marker) => !expected.includes(marker))) throw new DocumentParseError("FORGED_PROTECTION_TOKEN", "unknown protected token");
+  if (markers.some((marker, index) => marker !== expected[index])) throw new DocumentParseError("PROTECTION_TOKEN_ORDER", "protected token order changed");
   return true;
 }

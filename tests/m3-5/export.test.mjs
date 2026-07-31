@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { decodeCanonicalPackage, encodeCanonicalPackage } from "../../src/domain/canonical.mjs";
@@ -10,6 +10,25 @@ import { ValidationService } from "../../src/translation/validator.mjs";
 import { validFixtures } from "../fixtures/m3-2/corpus.mjs";
 import { workspace } from "../m3-4/helpers.mjs";
 import { createExportable } from "./helpers.mjs";
+
+const markerPattern = /(⟦LCT-P-\d{4}-[0-9a-f]{16}⟧)/g;
+const exactMarkerPattern = /^⟦LCT-P-\d{4}-[0-9a-f]{16}⟧$/;
+
+function translatedText(segment) {
+  return segment.sourceText.split(markerPattern).map((part) => exactMarkerPattern.test(part)
+    ? part
+    : part.replace(/\p{L}/gu, "x")).join("");
+}
+
+function assertNoPrivateExportKeys(value) {
+  const forbidden = new Set(["secret", "secrets", "api_key", "apiKey", "access_token", "token", "provider", "provider_payload", "request_payload", "response_payload", "ledger"]);
+  if (Array.isArray(value)) return value.forEach(assertNoPrivateExportKeys);
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    assert.equal(forbidden.has(key), false, `forbidden export key: ${key}`);
+    assertNoPrivateExportKeys(child);
+  }
+}
 
 test("all thirty-six fixtures produce deterministic ordinary and canonical artifacts twenty times", async () => {
   const fixture = await workspace("lectoria-m3-5-deterministic-");
@@ -24,7 +43,19 @@ test("all thirty-six fixtures produce deterministic ordinary and canonical artif
       try { ordinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format); }
       catch (error) { error.message = `${source.id}: ${error.message}`; throw error; }
       const canonical = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "canonical");
-      assert.equal(encodeCanonicalPackage(decodeCanonicalPackage(canonical.content.toString("utf8"))), canonical.content.toString("utf8"), source.id);
+      const decoded = decodeCanonicalPackage(canonical.content.toString("utf8"));
+      assert.equal(encodeCanonicalPackage(decoded), canonical.content.toString("utf8"), source.id);
+      for (const artifact of [ordinary, canonical]) {
+        assert.equal(artifact.manifest.workflow_id, prepared.workflow.workflowId);
+        assert.equal(artifact.manifest.source_revision_id, prepared.workflow.sourceRevisionId);
+        assert.equal(artifact.manifest.target_language, prepared.workflow.targetLanguage);
+        assert.equal(artifact.manifest.validation_run_id, prepared.run.validationRunId);
+      }
+      assert.equal(decoded.document.metadata.source_revision_id, prepared.workflow.sourceRevisionId);
+      assert.equal(decoded.document.metadata.target_language, prepared.workflow.targetLanguage);
+      assert.ok(decoded.document.segments.every((segment) => segment.target.review_status === "approved-for-export"));
+      assertNoPrivateExportKeys(decoded);
+      assertNoPrivateExportKeys(ordinary.manifest);
       for (let attempt = 1; attempt < 20; attempt += 1) {
         const nextOrdinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format);
         const nextCanonical = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "canonical");
@@ -33,6 +64,23 @@ test("all thirty-six fixtures produce deterministic ordinary and canonical artif
         assert.equal(nextOrdinary.manifestDigest, ordinary.manifestDigest);
         assert.equal(nextCanonical.manifestDigest, canonical.manifestDigest);
       }
+    }
+  } finally { await fixture.close(); }
+});
+
+test("all thirty-six edited fixtures preserve target text, block structure and protected values", async () => {
+  const fixture = await workspace("lectoria-m3-5-edited-roundtrip-");
+  try {
+    for (const source of validFixtures) {
+      const prepared = await createExportable(fixture, source, translatedText);
+      const expected = prepared.exports.workCopies.getBundle(prepared.workflow.workflowId);
+      const ordinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format);
+      const reparsed = normalizeDocument(source.format, ordinary.content);
+      assert.deepEqual(reparsed.segments.map((segment) => ({
+        kind: segment.kind, structuralPath: segment.structuralPath, sourceText: segment.sourceText,
+      })), expected.segments.map((segment) => ({
+        kind: segment.kind, structuralPath: segment.structuralPath, sourceText: segment.text,
+      })), source.id);
     }
   } finally { await fixture.close(); }
 });
@@ -148,6 +196,23 @@ test("export identities and records never cross workspace scope", async () => {
     await first.close();
     await second.close();
   }
+});
+
+test("existing export content and manifest corruption fail closed", async () => {
+  const fixture = await workspace("lectoria-m3-5-corrupt-export-");
+  try {
+    const prepared = await createExportable(fixture, { id: "corrupt", format: "text", content: "Stable source." });
+    const result = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "text");
+    const contentPath = join(fixture.root, result.relativePath, result.filename);
+    const manifestPath = join(fixture.root, result.relativePath, "manifest.json");
+    const manifest = await readFile(manifestPath);
+    await writeFile(contentPath, "tampered");
+    await assert.rejects(prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "text"), /corrupted/);
+    await writeFile(contentPath, result.content);
+    await writeFile(manifestPath, "{}");
+    await assert.rejects(prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, "text"), /manifest/);
+    await writeFile(manifestPath, manifest);
+  } finally { await fixture.close(); }
 });
 
 test("all export failure points preserve atomic files and retry to one immutable record", async () => {

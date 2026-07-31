@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { encodeCanonicalPackage } from "../domain/canonical.mjs";
 import { stableJson } from "../domain/contracts.mjs";
-import { stageAtomicDirectory } from "../storage/staging.mjs";
+import { readStagedFile, stageAtomicDirectory } from "../storage/staging.mjs";
 import { ValidationService } from "../translation/validator.mjs";
 import { WorkCopyService } from "../translation/work-copy-service.mjs";
 import { serializeOrdinaryDocument, verifyOrdinaryDocument } from "./serializer.mjs";
@@ -100,7 +98,7 @@ export class ExportService {
       content = Buffer.from(encodeCanonicalPackage(packageValue));
     } else {
       content = serializeOrdinaryDocument(format, source.normalizedSource, bundle.segments);
-      verifyOrdinaryDocument(format, content, bundle.segments);
+      verifyOrdinaryDocument(format, content, bundle.segments, source.normalizedSource);
     }
     const contentDigest = digest(content);
     const manifestBase = {
@@ -157,8 +155,8 @@ export class ExportService {
 
   async #verifyExisting(record) {
     if (!record) throw new ExportConflictError("export record not found");
-    const content = await readFile(join(this.root, record.relativePath, record.filename)).catch(() => null);
-    const manifest = await readFile(join(this.root, record.relativePath, "manifest.json")).catch(() => null);
+    const content = await readStagedFile(this.root, `${record.relativePath}/${record.filename}`).catch(() => null);
+    const manifest = await readStagedFile(this.root, `${record.relativePath}/manifest.json`).catch(() => null);
     if (!content || digest(content) !== record.contentDigest || !manifest) throw new ExportConflictError("export artifact is missing or corrupted");
     const parsed = JSON.parse(manifest.toString("utf8"));
     if (parsed.manifest_digest !== record.manifestDigest || digest(Buffer.from(stableJson(Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "manifest_digest"))))) !== record.manifestDigest) {

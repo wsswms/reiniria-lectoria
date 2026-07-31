@@ -1,0 +1,23 @@
+{
+  "stage": "M3.3",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "runtime_image": "node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90",
+  "schema_version": 8,
+  "alignment_wrong_identity_reuse": 0,
+  "split_merge_duplicate_competing_ambiguities_detected_percent": 100,
+  "concurrent_alignment_attempts": 100,
+  "concurrent_alignment_success": 1,
+  "concurrent_reimport_prepare_attempts": 100,
+  "concurrent_reimport_prepare_success": 1,
+  "migration_fault_cut_points": 3,
+  "attempts_per_migration_cut_point": 10,
+  "migration_fault_attempts_converged": 30,
+  "partial_finalized_revisions_visible": 0,
+  "parser_changes_propagated_stale": true,
+  "m3_3_tests_passed": 12,
+  "test_files_sha256": "364b1fb5c52b5c0fc804dabf0276e161533d5ae618e3a7e3249eb8996a70f8d7",
+  "network_requests": 0,
+  "result": "go"
+}

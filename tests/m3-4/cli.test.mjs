@@ -15,6 +15,7 @@ test("CLI parses commands and delegates all storage work to the workflow API", (
 test("workflow API exposes only service operations and rejects unknown commands", () => {
   const called = [];
   const api = new WorkflowApi({
+    imports: {}, reimports: {}, states: {}, exports: {},
     workCopies: {
       addCandidate(...args) { called.push(["candidate:add", ...args]); return "candidate"; },
       listCandidates() {}, selectCandidate() {}, edit() {}, getBundle() {},
@@ -26,4 +27,27 @@ test("workflow API exposes only service operations and rejects unknown commands"
   assert.equal(api.execute("candidate:add", payload), "candidate");
   assert.deepEqual(called, [["candidate:add", "w", "s", "t", payload.actor]]);
   assert.throws(() => api.execute("sqlite:query", {}), /unknown workflow command/);
+});
+
+test("workflow API derives workflow scope from a confirmed import", () => {
+  const calls = [];
+  const imported = { confirmed: true, documentId: "trusted-document", sourceRevisionId: "trusted-revision" };
+  const api = new WorkflowApi({
+    imports: { get(importId) { calls.push(["import:get", importId]); return imported; } },
+    states: { create(identity, content, state) { calls.push(["workflow:create", identity, content, state]); return identity; } },
+    reimports: {}, workCopies: {}, validation: {}, reviews: {}, exports: {},
+  });
+  const result = api.execute("workflow:create", {
+    importId: "trusted-import", workflowId: "workflow", targetLanguage: "fr",
+    documentId: "forged-document", sourceRevisionId: "forged-revision",
+  });
+  assert.deepEqual(result, {
+    workflowId: "workflow", documentId: "trusted-document", sourceRevisionId: "trusted-revision", targetLanguage: "fr",
+  });
+  assert.deepEqual(calls, [
+    ["import:get", "trusted-import"],
+    ["workflow:create", result, {}, "editing"],
+  ]);
+  imported.confirmed = false;
+  assert.throws(() => api.execute("workflow:create", { importId: "trusted-import", workflowId: "other", targetLanguage: "de" }), /confirmed/);
 });
