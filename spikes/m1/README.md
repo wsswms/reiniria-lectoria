@@ -24,3 +24,11 @@ DOCKER_BIN=/path/to/docker ./scripts/test-m1-2.sh
 ```
 
 M1.2 使用 18 个 Markdown 与 6 个 HTML 自建 fixture，验证关键 AST 结构 round-trip、保护项严格恢复，以及插入、删除、移动、格式变化、轻微改写、拆分和合并七类 segment 更新。
+
+## M1.3 运行
+
+```sh
+DOCKER_BIN=/path/to/docker ./scripts/test-m1-3.sh
+```
+
+M1.3 使用 Node 容器内置 SQLite/FTS5，不引入向量、Embedding 或 Rerank 依赖。固定语料含中、日、英各 20 条，固定查询每种语言各 12 条。

@@ -1,0 +1,28 @@
+{
+  "stage": "M1.3",
+  "corpus": {
+    "workspace_documents": 60,
+    "total_index_rows": 120,
+    "queries": 36,
+    "exact_queries": 12,
+    "sha256": "3485c277f7ee3e45b4a8b03a3be31847867db9ee0e1783905b7adc581c3d9a03"
+  },
+  "sqlite": {
+    "version": "3.50.4",
+    "fts5": true,
+    "tokenizer": "trigram"
+  },
+  "metrics": {
+    "exact_first_rate": 1,
+    "macro_recall_at_5": 1,
+    "recall_at_5_by_language": {
+      "zh": 1,
+      "ja": 1,
+      "en": 1
+    },
+    "wrong_workspace_hits": 0,
+    "ordered_results_identical_after_rebuild": true,
+    "index_ms": 1.1343750000000004,
+    "rebuild_ms": 1.2146660000000011
+  }
+}
