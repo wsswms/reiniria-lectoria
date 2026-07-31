@@ -10,7 +10,8 @@
     "test:m1.1": "node --test tests/m1-1/*.test.mjs",
     "test:m1.2": "node --test tests/m1-2/*.test.mjs",
     "test:m1.3": "node --test tests/m1-3/*.test.mjs",
-    "test": "npm run test:m1.1 && npm run test:m1.2 && npm run test:m1.3"
+    "test:m1.4": "node --test tests/m1-4/*.test.mjs",
+    "test": "npm run test:m1.1 && npm run test:m1.2 && npm run test:m1.3 && npm run test:m1.4"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.83.0",

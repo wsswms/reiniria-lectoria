@@ -32,3 +32,11 @@ DOCKER_BIN=/path/to/docker ./scripts/test-m1-3.sh
 ```
 
 M1.3 使用 Node 容器内置 SQLite/FTS5，不引入向量、Embedding 或 Rerank 依赖。固定语料含中、日、英各 20 条，固定查询每种语言各 12 条。
+
+## M1.4 运行
+
+```sh
+DOCKER_BIN=/path/to/docker ./scripts/test-m1-4.sh
+```
+
+M1.4 在未发布宿主端口的容器网络内验证 HTTP、直接 TLS 与受信反向代理 TLS。证书和私钥是短期生成的测试夹具，不用于任何真实部署。
