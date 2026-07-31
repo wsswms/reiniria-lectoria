@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -677,11 +677,208 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'import confirmation is immutable'); END;
     `,
   }),
+  Object.freeze({
+    version: 8,
+    name: "reimport-alignment-and-stale",
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE source_revisions_v8 (
+        workspace_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        original_digest TEXT NOT NULL,
+        normalized_digest TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, source_revision_id),
+        UNIQUE (workspace_id, document_id, source_revision_id),
+        FOREIGN KEY (workspace_id, document_id)
+          REFERENCES documents(workspace_id, document_id) ON DELETE CASCADE
+      ) STRICT;
+
+      INSERT INTO source_revisions_v8 SELECT * FROM source_revisions;
+      DROP TABLE source_revisions;
+      ALTER TABLE source_revisions_v8 RENAME TO source_revisions;
+
+      CREATE TRIGGER source_revisions_no_update
+      BEFORE UPDATE ON source_revisions
+      BEGIN SELECT RAISE(ABORT, 'source revision is immutable'); END;
+      CREATE TRIGGER source_revisions_no_delete
+      BEFORE DELETE ON source_revisions
+      BEGIN SELECT RAISE(ABORT, 'source revision is immutable'); END;
+
+      CREATE TABLE reimport_operations (
+        workspace_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        base_revision_id TEXT NOT NULL,
+        new_revision_id TEXT NOT NULL,
+        import_id TEXT NOT NULL,
+        format TEXT NOT NULL CHECK(format IN ('markdown', 'html', 'text')),
+        raw_object_id TEXT NOT NULL,
+        raw_digest TEXT NOT NULL,
+        normalized_text TEXT NOT NULL,
+        normalized_digest TEXT NOT NULL,
+        projection_json TEXT NOT NULL CHECK(json_valid(projection_json)),
+        projection_digest TEXT NOT NULL,
+        parser_version TEXT NOT NULL,
+        sanitizer_version TEXT NOT NULL,
+        diagnostics_json TEXT NOT NULL CHECK(json_valid(diagnostics_json)),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'finalized', 'canceled')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        created_at TEXT NOT NULL,
+        finalized_at TEXT,
+        PRIMARY KEY (workspace_id, operation_id),
+        UNIQUE (workspace_id, operation_id, document_id),
+        UNIQUE (workspace_id, new_revision_id),
+        UNIQUE (workspace_id, import_id),
+        FOREIGN KEY (workspace_id, document_id, base_revision_id)
+          REFERENCES source_revisions(workspace_id, document_id, source_revision_id),
+        FOREIGN KEY (workspace_id, raw_object_id)
+          REFERENCES committed_objects(workspace_id, object_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_pending_reimport_per_document
+        ON reimport_operations(workspace_id, document_id)
+        WHERE status = 'pending';
+
+      CREATE TABLE reimport_segment_candidates (
+        workspace_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        new_segment_id TEXT NOT NULL,
+        suggested_segment_id TEXT,
+        alignment_status TEXT NOT NULL CHECK(alignment_status IN ('unchanged', 'changed', 'moved', 'inserted', 'ambiguous')),
+        score REAL,
+        kind TEXT NOT NULL,
+        structural_path TEXT NOT NULL,
+        source_text TEXT NOT NULL,
+        source_digest TEXT NOT NULL,
+        translatable INTEGER NOT NULL CHECK(translatable IN (0, 1)),
+        protected_json TEXT NOT NULL CHECK(json_valid(protected_json)),
+        evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+        PRIMARY KEY (workspace_id, operation_id, ordinal),
+        UNIQUE (workspace_id, operation_id, new_segment_id),
+        FOREIGN KEY (workspace_id, operation_id, document_id)
+          REFERENCES reimport_operations(workspace_id, operation_id, document_id),
+        FOREIGN KEY (workspace_id, document_id, suggested_segment_id)
+          REFERENCES document_segments(workspace_id, document_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE reimport_alignment_confirmations (
+        workspace_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        confirmed_segment_id TEXT,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, operation_id, ordinal),
+        UNIQUE (workspace_id, operation_id, confirmed_segment_id),
+        FOREIGN KEY (workspace_id, operation_id, ordinal)
+          REFERENCES reimport_segment_candidates(workspace_id, operation_id, ordinal),
+        FOREIGN KEY (workspace_id, document_id, confirmed_segment_id)
+          REFERENCES document_segments(workspace_id, document_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE reimport_semantic_confirmations (
+        workspace_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, operation_id, ordinal),
+        FOREIGN KEY (workspace_id, operation_id, ordinal)
+          REFERENCES reimport_segment_candidates(workspace_id, operation_id, ordinal),
+        FOREIGN KEY (workspace_id, operation_id, document_id)
+          REFERENCES reimport_operations(workspace_id, operation_id, document_id)
+      ) STRICT;
+
+      CREATE TABLE source_revision_impacts (
+        workspace_id TEXT NOT NULL,
+        impact_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        from_revision_id TEXT NOT NULL,
+        to_revision_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        change_kind TEXT NOT NULL CHECK(change_kind IN ('changed', 'moved', 'inserted', 'deleted', 'parser-changed')),
+        stale_required INTEGER NOT NULL CHECK(stale_required IN (0, 1)),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json)),
+        PRIMARY KEY (workspace_id, impact_id),
+        FOREIGN KEY (workspace_id, document_id, from_revision_id)
+          REFERENCES source_revisions(workspace_id, document_id, source_revision_id),
+        FOREIGN KEY (workspace_id, document_id, to_revision_id)
+          REFERENCES source_revisions(workspace_id, document_id, source_revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER reimport_operations_fixed_fields
+      BEFORE UPDATE OF document_id, base_revision_id, new_revision_id, import_id, format,
+                       raw_object_id, raw_digest, normalized_text, normalized_digest,
+                       projection_json, projection_digest, parser_version,
+                       sanitizer_version, diagnostics_json, created_at
+      ON reimport_operations
+      BEGIN SELECT RAISE(ABORT, 'reimport operation facts are immutable'); END;
+
+      CREATE TRIGGER reimport_operations_status_guard
+      BEFORE UPDATE OF status ON reimport_operations
+      WHEN (OLD.status || '->' || NEW.status) NOT IN ('pending->finalized', 'pending->canceled')
+      BEGIN SELECT RAISE(ABORT, 'invalid reimport operation transition'); END;
+
+      CREATE TRIGGER reimport_segment_candidates_no_update
+      BEFORE UPDATE ON reimport_segment_candidates
+      BEGIN SELECT RAISE(ABORT, 'reimport candidate is immutable'); END;
+      CREATE TRIGGER reimport_segment_candidates_no_delete
+      BEFORE DELETE ON reimport_segment_candidates
+      BEGIN SELECT RAISE(ABORT, 'reimport candidate is immutable'); END;
+      CREATE TRIGGER reimport_alignment_confirmations_no_update
+      BEFORE UPDATE ON reimport_alignment_confirmations
+      BEGIN SELECT RAISE(ABORT, 'alignment confirmation is immutable'); END;
+      CREATE TRIGGER reimport_alignment_confirmations_no_delete
+      BEFORE DELETE ON reimport_alignment_confirmations
+      BEGIN SELECT RAISE(ABORT, 'alignment confirmation is immutable'); END;
+      CREATE TRIGGER reimport_semantic_confirmations_no_update
+      BEFORE UPDATE ON reimport_semantic_confirmations
+      BEGIN SELECT RAISE(ABORT, 'semantic confirmation is immutable'); END;
+      CREATE TRIGGER reimport_semantic_confirmations_no_delete
+      BEFORE DELETE ON reimport_semantic_confirmations
+      BEGIN SELECT RAISE(ABORT, 'semantic confirmation is immutable'); END;
+      CREATE TRIGGER source_revision_impacts_no_update
+      BEFORE UPDATE ON source_revision_impacts
+      BEGIN SELECT RAISE(ABORT, 'source revision impact is immutable'); END;
+      CREATE TRIGGER source_revision_impacts_no_delete
+      BEFORE DELETE ON source_revision_impacts
+      BEGIN SELECT RAISE(ABORT, 'source revision impact is immutable'); END;
+
+      DROP TRIGGER translation_workflows_state_guard;
+      CREATE TRIGGER translation_workflows_state_guard
+      BEFORE UPDATE OF state ON translation_workflows
+      WHEN (OLD.state || '->' || NEW.state) NOT IN (
+        'imported->extraction-pending', 'imported->source-confirmed', 'imported->stale', 'imported->rejected',
+        'extraction-pending->source-confirmed', 'extraction-pending->stale', 'extraction-pending->rejected',
+        'source-confirmed->queued', 'source-confirmed->stale', 'source-confirmed->rejected',
+        'queued->generating', 'queued->stale', 'queued->rejected',
+        'generating->draft-machine', 'generating->candidate-invalid', 'generating->candidate-valid', 'generating->stale', 'generating->rejected',
+        'draft-machine->candidate-invalid', 'draft-machine->candidate-valid', 'draft-machine->stale', 'draft-machine->rejected',
+        'candidate-invalid->queued', 'candidate-invalid->stale', 'candidate-invalid->rejected',
+        'candidate-valid->editing', 'candidate-valid->stale', 'candidate-valid->rejected',
+        'editing->human-reviewed', 'editing->stale', 'editing->rejected',
+        'human-reviewed->approved-for-export', 'human-reviewed->stale', 'human-reviewed->rejected',
+        'approved-for-export->exported', 'approved-for-export->stale',
+        'exported->stale',
+        'stale->queued', 'stale->human-reviewed', 'stale->rejected',
+        'rejected->queued'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid translation workflow state transition'); END;
+    `,
+  }),
 ]);
 
 export function migrationChecksum(migration) {
   return createHash("sha256")
-    .update(`${migration.version}\n${migration.name}\n${migration.sql}`, "utf8")
+    .update(`${migration.version}\n${migration.name}\n${migration.sql}${migration.foreignKeysOff ? "\nforeign-keys-off" : ""}`, "utf8")
     .digest("hex");
 }
 
@@ -714,6 +911,9 @@ export function applyMigrations(database, { inject = () => {} } = {}) {
     const apply = database.transaction(() => {
       database.exec(migration.sql);
       inject(`after-sql-${migration.version}`);
+      if (migration.foreignKeysOff && database.pragma("foreign_key_check").length !== 0) {
+        throw new Error(`migration ${migration.version} introduced foreign key violations`);
+      }
       database.prepare(`
         INSERT INTO schema_migrations(version, name, checksum, applied_at)
         VALUES (?, ?, ?, ?)
@@ -725,7 +925,12 @@ export function applyMigrations(database, { inject = () => {} } = {}) {
       );
       database.pragma(`user_version = ${migration.version}`);
     });
-    apply();
+    if (migration.foreignKeysOff) database.pragma("foreign_keys = OFF");
+    try {
+      apply();
+    } finally {
+      if (migration.foreignKeysOff) database.pragma("foreign_keys = ON");
+    }
     inject(`after-commit-${migration.version}`);
   }
 

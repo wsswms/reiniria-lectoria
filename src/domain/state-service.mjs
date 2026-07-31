@@ -8,13 +8,13 @@ export const STATES = Object.freeze([
 ]);
 
 export const ALLOWED_TRANSITIONS = Object.freeze(new Map([
-  ["imported", new Set(["extraction-pending", "source-confirmed", "rejected"])],
-  ["extraction-pending", new Set(["source-confirmed", "rejected"])],
+  ["imported", new Set(["extraction-pending", "source-confirmed", "stale", "rejected"])],
+  ["extraction-pending", new Set(["source-confirmed", "stale", "rejected"])],
   ["source-confirmed", new Set(["queued", "stale", "rejected"])],
-  ["queued", new Set(["generating", "rejected"])],
-  ["generating", new Set(["draft-machine", "candidate-invalid", "candidate-valid", "rejected"])],
-  ["draft-machine", new Set(["candidate-invalid", "candidate-valid", "rejected"])],
-  ["candidate-invalid", new Set(["queued", "rejected"])],
+  ["queued", new Set(["generating", "stale", "rejected"])],
+  ["generating", new Set(["draft-machine", "candidate-invalid", "candidate-valid", "stale", "rejected"])],
+  ["draft-machine", new Set(["candidate-invalid", "candidate-valid", "stale", "rejected"])],
+  ["candidate-invalid", new Set(["queued", "stale", "rejected"])],
   ["candidate-valid", new Set(["editing", "stale", "rejected"])],
   ["editing", new Set(["human-reviewed", "stale", "rejected"])],
   ["human-reviewed", new Set(["approved-for-export", "stale", "rejected"])],

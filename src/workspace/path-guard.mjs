@@ -36,6 +36,18 @@ function assertContained(root, candidate) {
   if (relation === "" || relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation)) reject();
 }
 
+async function createDirectorySafely(path) {
+  try {
+    await mkdir(path);
+    return;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) reject();
+}
+
 async function assertNoLinks(root, parts, { allowMissingLeaf = false } = {}) {
   const canonicalRoot = await realpath(root);
   let cursor = canonicalRoot;
@@ -79,7 +91,7 @@ export async function ensureWorkspaceDirectory(root, input) {
     } catch (error) {
       if (error instanceof InvalidWorkspacePathError) throw error;
       if (error?.code !== "ENOENT") throw error;
-      await mkdir(cursor);
+      await createDirectorySafely(cursor);
     }
   }
   return cursor;
@@ -100,7 +112,7 @@ export async function writeWorkspaceFile(root, input, content) {
     } catch (error) {
       if (error instanceof InvalidWorkspacePathError) throw error;
       if (error?.code !== "ENOENT") throw error;
-      await mkdir(cursor);
+      await createDirectorySafely(cursor);
     }
   }
   const filename = await assertNoLinks(root, parts, { allowMissingLeaf: true });
