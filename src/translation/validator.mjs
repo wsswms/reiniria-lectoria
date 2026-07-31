@@ -124,7 +124,7 @@ export class ValidationService {
       SELECT validation_run_id AS validationRunId, workflow_id AS workflowId,
              source_revision_id AS sourceRevisionId, target_language AS targetLanguage,
              working_copy_digest AS workingCopyDigest, parser_version AS parserVersion,
-             validator_version AS validatorVersion
+             validator_version AS validatorVersion, created_at AS createdAt
       FROM validation_runs WHERE workspace_id = ? AND validation_run_id = ?
     `).get(this.workspaceId, validationRunId);
     if (!run) throw new ValidationConflictError("validation run not found");

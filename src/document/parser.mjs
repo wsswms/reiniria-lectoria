@@ -9,7 +9,7 @@ import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import { stableJson } from "../domain/contracts.mjs";
 
-export const PARSER_VERSION = "lectoria-parser-v1";
+export const PARSER_VERSION = "lectoria-parser-v2";
 export const SANITIZER_VERSION = "rehype-sanitize-6.0.0/lectoria-v1";
 
 export const DEFAULT_IMPORT_LIMITS = Object.freeze({
@@ -120,6 +120,10 @@ function sanitizeHtmlTree(tree) {
 function sanitizeEmbeddedMarkdownHtml(tree) {
   const findings = [];
   function visit(node, path) {
+    if (["link", "image"].includes(node.type) && dangerousUrl(node.url)) {
+      findings.push({ code: "MARKDOWN_EXECUTABLE_URL_REMOVED", path, detail: node.type });
+      node.url = "";
+    }
     if (node.type === "html") {
       const parsed = htmlParser.parse(node.value);
       const result = sanitizeHtmlTree(parsed);
@@ -268,12 +272,13 @@ export function normalizeDocument(format, input, { limits: overrides = {} } = {}
     projection = { type: "text-document", paragraphs: text.split(/\n{2,}/).length };
     segments = collectTextSegments(text, limits);
   } else if (format === "markdown") {
-    const tree = markdownProcessor.parse(text);
-    diagnostics = sanitizeEmbeddedMarkdownHtml(tree);
-    treeMetrics = inspectTree(tree, limits);
-    normalized = markdownProcessor.stringify(tree);
-    projection = structuralProjection(tree);
-    segments = collectAstSegments(tree, format, limits);
+    const initialTree = markdownProcessor.parse(text);
+    diagnostics = sanitizeEmbeddedMarkdownHtml(initialTree);
+    normalized = markdownProcessor.stringify(initialTree);
+    const stableTree = markdownProcessor.parse(normalized);
+    treeMetrics = inspectTree(stableTree, limits);
+    projection = structuralProjection(stableTree);
+    segments = collectAstSegments(stableTree, format, limits);
   } else {
     const parsed = htmlParser.parse(text);
     const sanitized = sanitizeHtmlTree(parsed);

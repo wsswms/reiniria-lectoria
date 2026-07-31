@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -909,6 +909,32 @@ export const MIGRATIONS = Object.freeze([
       CREATE UNIQUE INDEX one_warning_confirmation
         ON review_events(workspace_id, workflow_id, validation_run_id, json_extract(details_json, '$.findingId'))
         WHERE action = 'warning-confirmed';
+    `,
+  }),
+  Object.freeze({
+    version: 10,
+    name: "deterministic-export-artifacts",
+    sql: `
+      CREATE TABLE export_artifact_metadata (
+        workspace_id TEXT NOT NULL,
+        export_id TEXT NOT NULL,
+        format TEXT NOT NULL CHECK(format IN ('canonical', 'markdown', 'html', 'text')),
+        filename TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, export_id),
+        UNIQUE (workspace_id, export_id, format),
+        FOREIGN KEY (workspace_id, export_id)
+          REFERENCES export_records(workspace_id, export_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_deterministic_export
+        ON export_records(workspace_id, workflow_id, validation_run_id, content_digest, manifest_digest);
+
+      CREATE TRIGGER export_artifact_metadata_no_update
+      BEFORE UPDATE ON export_artifact_metadata
+      BEGIN SELECT RAISE(ABORT, 'export metadata is immutable'); END;
+      CREATE TRIGGER export_artifact_metadata_no_delete
+      BEFORE DELETE ON export_artifact_metadata
+      BEGIN SELECT RAISE(ABORT, 'export metadata is immutable'); END;
     `,
   }),
 ]);
