@@ -62,6 +62,60 @@ export function segmentContract(input) {
   });
 }
 
+export function documentSegmentContract(input) {
+  return Object.freeze({
+    workspaceId: opaqueId(input.workspaceId, "workspaceId"),
+    documentId: opaqueId(input.documentId, "documentId"),
+    segmentId: opaqueId(input.segmentId, "segmentId"),
+  });
+}
+
+const ALIGNMENT_STATUSES = new Set([
+  "initial", "unchanged", "changed", "inserted", "deleted", "moved", "ambiguous",
+]);
+
+export function sourceSegmentVersionContract(input) {
+  if (!Number.isInteger(input.ordinal) || input.ordinal < 0) throw new TypeError("ordinal must be a non-negative integer");
+  if (typeof input.translatable !== "boolean") throw new TypeError("translatable must be boolean");
+  if (!Array.isArray(input.protected)) throw new TypeError("protected must be an array");
+  if (!ALIGNMENT_STATUSES.has(input.alignmentStatus)) throw new TypeError("alignmentStatus is invalid");
+  return Object.freeze({
+    workspaceId: opaqueId(input.workspaceId, "workspaceId"),
+    documentId: opaqueId(input.documentId, "documentId"),
+    sourceRevisionId: opaqueId(input.sourceRevisionId, "sourceRevisionId"),
+    segmentId: opaqueId(input.segmentId, "segmentId"),
+    kind: requiredString(input.kind, "kind"),
+    structuralPath: requiredString(input.structuralPath, "structuralPath"),
+    sourceText: requiredString(input.sourceText, "sourceText"),
+    sourceDigest: digest(input.sourceDigest, "sourceDigest"),
+    ordinal: input.ordinal,
+    translatable: input.translatable,
+    protected: Object.freeze(input.protected.map((item) => Object.freeze({ ...item }))),
+    alignmentStatus: input.alignmentStatus,
+  });
+}
+
+function canonicalLanguageTag(value) {
+  requiredString(value, "targetLanguage");
+  try {
+    const [canonical] = Intl.getCanonicalLocales(value);
+    if (!canonical) throw new RangeError();
+    return canonical;
+  } catch {
+    throw new TypeError("targetLanguage must be a valid language tag");
+  }
+}
+
+export function translationWorkflowContract(input) {
+  return Object.freeze({
+    workspaceId: opaqueId(input.workspaceId, "workspaceId"),
+    workflowId: opaqueId(input.workflowId, "workflowId"),
+    documentId: opaqueId(input.documentId, "documentId"),
+    sourceRevisionId: opaqueId(input.sourceRevisionId, "sourceRevisionId"),
+    targetLanguage: canonicalLanguageTag(input.targetLanguage),
+  });
+}
+
 export function stableJson(value) {
   const seen = new Set();
   function normalize(item) {
