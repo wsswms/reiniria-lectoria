@@ -1,0 +1,36 @@
+# 独立私有项目仓库，不进入公开仓库
+/.project-private/
+
+# 防止私有资料被误放回旧路径
+/docs/phase-0/
+/docs/project-management/
+
+# 本地环境与编辑器文件
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets 与本地覆盖配置
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 运行期和派生数据（后续目录约定）
+/state/
+/private/
+/derived/
+/staging/
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# 常见构建与依赖目录（具体技术栈确定后可收紧）
+/node_modules/
+/dist/
+/build/
+/coverage/
