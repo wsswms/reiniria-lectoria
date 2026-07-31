@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -51,6 +51,65 @@ export const MIGRATIONS = Object.freeze([
         UNIQUE (workspace_id, source_revision_id, ordinal),
         FOREIGN KEY (workspace_id, source_revision_id)
           REFERENCES source_revisions(workspace_id, source_revision_id) ON DELETE CASCADE
+      ) STRICT;
+    `,
+  }),
+  Object.freeze({
+    version: 2,
+    name: "workspace-scoped-resources",
+    sql: `
+      CREATE TABLE object_records (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE task_placeholders (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE idempotency_keys (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE cache_entries (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE derived_indexes (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE audit_events (
+        workspace_id TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, resource_id),
+        FOREIGN KEY (workspace_id)
+          REFERENCES workspace_meta(workspace_id) ON DELETE CASCADE
       ) STRICT;
     `,
   }),

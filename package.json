@@ -8,9 +8,11 @@
   },
   "scripts": {
     "test:m2.1": "node --test tests/m2-1/*.test.mjs",
-    "test": "npm run test:m2.1",
+    "test:m2.2": "node --test tests/m2-2/*.test.mjs",
+    "test": "npm run test:m2.1 && npm run test:m2.2",
     "compare:sqlite": "node scripts/compare-sqlite-options.mjs",
-    "measure:m2.1": "node scripts/measure-m2-1.mjs"
+    "measure:m2.1": "node scripts/measure-m2-1.mjs",
+    "measure:m2.2": "node scripts/measure-m2-2.mjs"
   },
   "dependencies": {
     "better-sqlite3": "13.0.2"

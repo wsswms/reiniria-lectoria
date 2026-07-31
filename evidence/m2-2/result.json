@@ -1,0 +1,21 @@
+{
+  "stage": "M2.2",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "runtime_image": "node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90",
+  "workspaces": 3,
+  "resource_classes": 9,
+  "cross_workspace_attempts": 900,
+  "cross_workspace_rejected": 900,
+  "database_cross_workspace_attempts": 900,
+  "database_cross_workspace_rejected": 900,
+  "lifecycle_attempts": 20,
+  "lifecycle_passed": 20,
+  "path_negative_cases_rejected": 17,
+  "outside_root_writes": 0,
+  "registry_content_canary_leaks": 0,
+  "fault_injection_cases_failed_closed": 3,
+  "test_files_sha256": "3bc006cd8dacb121f62f2fb2f15fde5d9221d02b23ff645304c5203e1349dce4",
+  "result": "go"
+}
