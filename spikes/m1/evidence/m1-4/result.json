@@ -1,0 +1,13 @@
+{
+  "stage": "M1.4",
+  "modes": [
+    "http",
+    "https-direct",
+    "https-proxy"
+  ],
+  "default_bind": "127.0.0.1",
+  "invalid_config_attempts": 100,
+  "invalid_config_rejected": 100,
+  "last_known_good_preserved": true,
+  "public_ports_published_by_test_runner": 0
+}
