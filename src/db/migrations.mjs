@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -872,6 +872,43 @@ export const MIGRATIONS = Object.freeze([
         'rejected->queued'
       )
       BEGIN SELECT RAISE(ABORT, 'invalid translation workflow state transition'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 9,
+    name: "editing-validation-review-guards",
+    sql: `
+      CREATE TABLE candidate_creation_events (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates(workspace_id, workflow_id, segment_id, candidate_id)
+      ) STRICT;
+
+      CREATE TRIGGER candidate_creation_events_no_update
+      BEFORE UPDATE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+      CREATE TRIGGER candidate_creation_events_no_delete
+      BEFORE DELETE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+
+      CREATE TRIGGER working_copy_heads_update_guard
+      BEFORE UPDATE ON working_copy_heads
+      WHEN NEW.version <> OLD.version + 1 OR NEW.head_revision_id = OLD.head_revision_id
+      BEGIN SELECT RAISE(ABORT, 'invalid working copy head update'); END;
+      CREATE TRIGGER working_copy_heads_no_delete
+      BEFORE DELETE ON working_copy_heads
+      BEGIN SELECT RAISE(ABORT, 'working copy head is immutable'); END;
+
+      CREATE UNIQUE INDEX one_warning_confirmation
+        ON review_events(workspace_id, workflow_id, validation_run_id, json_extract(details_json, '$.findingId'))
+        WHERE action = 'warning-confirmed';
     `,
   }),
 ]);
