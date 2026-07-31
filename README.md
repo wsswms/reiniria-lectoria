@@ -1,5 +1,17 @@
 # Reiniria Lectoria
 
+Reiniria Lectoria 是本地优先、工作区强隔离的独立文档翻译平台。当前公开实现从 M2 数据底座开始，M1 技术验证原型仍在独立分支审阅，不作为生产代码依赖。
+
+## M2.1 验证
+
+固定 linux/arm64 Node 22.19.0 容器用于构建和测试：
+
+```sh
+DOCKER_BIN=/path/to/docker ./scripts/test-m2-1.sh
+```
+
+该入口不调用模型或外部内容 API，运行时使用只读根文件系统、无网络、无额外 capabilities，并把测试数据库限制在临时内存文件系统。
+
 Reiniria Lectoria 是一个面向各类文档的独立、本地优先翻译平台。平台以相互隔离的工作区组织项目，并计划通过标准接口开放输入输出能力；博客、Hugo 或其他内容系统只是可选 Adapter。
 
 ## 项目状态

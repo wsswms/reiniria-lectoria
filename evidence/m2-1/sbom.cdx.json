@@ -1,0 +1,154 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:a0d3510b-92dc-4a48-a3fb-589627833b85",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-31T14:56:40.430Z",
+    "lifecycles": [
+      {
+        "phase": "build"
+      }
+    ],
+    "tools": [
+      {
+        "vendor": "npm",
+        "name": "cli",
+        "version": "10.9.3"
+      }
+    ],
+    "component": {
+      "bom-ref": "reiniria-lectoria@0.1.0",
+      "type": "library",
+      "name": "app",
+      "version": "0.1.0",
+      "scope": "required",
+      "purl": "pkg:npm/reiniria-lectoria@0.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": ""
+        },
+        {
+          "name": "cdx:npm:package:private",
+          "value": "true"
+        }
+      ],
+      "externalReferences": []
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "better-sqlite3@13.0.2",
+      "type": "library",
+      "name": "better-sqlite3",
+      "version": "13.0.2",
+      "scope": "required",
+      "author": "Joshua Wise",
+      "description": "The fastest and simplest library for SQLite in Node.js.",
+      "purl": "pkg:npm/better-sqlite3@13.0.2",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/better-sqlite3"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-13.0.2.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git://github.com/WiseLibs/better-sqlite3.git"
+        },
+        {
+          "type": "website",
+          "url": "http://github.com/WiseLibs/better-sqlite3"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/WiseLibs/better-sqlite3/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "8d6ea8b9f78385765a897f4bc3903ea1ead50a5c78885ac8eae0e3d73bbb4aa5008da93dbdb26f03434470a2cdc478901dbea4602a05cf35d857460e6ae855de"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "node-addon-api@8.9.0",
+      "type": "library",
+      "name": "node-addon-api",
+      "version": "8.9.0",
+      "scope": "required",
+      "description": "Node.js API (Node-API)",
+      "purl": "pkg:npm/node-addon-api@8.9.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/node-addon-api"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-8.9.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git://github.com/nodejs/node-addon-api.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/nodejs/node-addon-api"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/nodejs/node-addon-api/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7a464c79a688cd24134a9afb5f65f788933b953ce09f1f1a8401bda497d3ffbfb5e2694433c65843d720083bd24916d17852b4a07962dd6ad9742891b20013f5"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "reiniria-lectoria@0.1.0",
+      "dependsOn": [
+        "better-sqlite3@13.0.2"
+      ]
+    },
+    {
+      "ref": "better-sqlite3@13.0.2",
+      "dependsOn": [
+        "node-addon-api@8.9.0"
+      ]
+    },
+    {
+      "ref": "node-addon-api@8.9.0",
+      "dependsOn": []
+    }
+  ]
+}
