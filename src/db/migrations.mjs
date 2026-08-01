@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1059,6 +1059,70 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER usage_cost_records_no_delete
       BEFORE DELETE ON usage_cost_records
       BEGIN SELECT RAISE(ABORT, 'usage cost record is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 12,
+    name: "translation-task-runtime-state",
+    sql: `
+      CREATE TABLE task_execution_policies (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 10),
+        batch_size INTEGER NOT NULL CHECK(batch_size BETWEEN 1 AND 100),
+        offline_reason TEXT,
+        PRIMARY KEY (workspace_id, task_id),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE attempt_runtime_states (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL CHECK(attempt_number BETWEEN 1 AND 10),
+        lease_holder TEXT,
+        lease_expires_at TEXT,
+        heartbeat_at TEXT,
+        next_retry_at TEXT,
+        error_category TEXT,
+        provider_call_state TEXT NOT NULL CHECK(provider_call_state IN ('not-started', 'started', 'completed', 'unknown')),
+        outcome_digest TEXT,
+        PRIMARY KEY (workspace_id, attempt_id),
+        UNIQUE (workspace_id, task_id, segment_id, attempt_number),
+        CHECK((lease_holder IS NULL AND lease_expires_at IS NULL) OR (lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id),
+        FOREIGN KEY (workspace_id, task_id, segment_id, attempt_id)
+          REFERENCES translation_attempts(workspace_id, task_id, segment_id, attempt_id)
+      ) STRICT;
+
+      CREATE TABLE task_command_results (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_digest TEXT NOT NULL,
+        result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, operation, idempotency_key),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE INDEX runnable_attempts
+        ON translation_attempts(workspace_id, state, created_at);
+      CREATE INDEX retry_schedule
+        ON attempt_runtime_states(workspace_id, next_retry_at)
+        WHERE next_retry_at IS NOT NULL;
+
+      CREATE TRIGGER task_command_results_no_update
+      BEFORE UPDATE ON task_command_results
+      BEGIN SELECT RAISE(ABORT, 'task command result is immutable'); END;
+      CREATE TRIGGER task_command_results_no_delete
+      BEFORE DELETE ON task_command_results
+      BEGIN SELECT RAISE(ABORT, 'task command result is immutable'); END;
     `,
   }),
 ]);
