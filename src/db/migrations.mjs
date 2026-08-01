@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1782,6 +1782,234 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'candidate comparison member is immutable'); END;
       CREATE TRIGGER candidate_comparison_members_no_delete BEFORE DELETE ON candidate_comparison_members
       BEGIN SELECT RAISE(ABORT, 'candidate comparison member is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 18,
+    name: "internet-investigation-and-knowledge-proposals",
+    sql: `
+      CREATE TABLE internet_investigations (
+        workspace_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        query_text TEXT NOT NULL CHECK(length(query_text) BETWEEN 1 AND 512),
+        country TEXT NOT NULL CHECK(length(country) = 2),
+        search_language TEXT NOT NULL CHECK(length(search_language) BETWEEN 2 AND 16),
+        query_digest TEXT NOT NULL CHECK(length(query_digest) = 71 AND substr(query_digest, 1, 7) = 'sha256:'),
+        max_results INTEGER NOT NULL CHECK(max_results BETWEEN 1 AND 20),
+        search_policy_version TEXT NOT NULL,
+        fetch_policy_version TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, investigation_id),
+        UNIQUE (workspace_id, investigation_id, task_id, workflow_id, segment_id),
+        UNIQUE (workspace_id, investigation_id, workflow_id, segment_id),
+        FOREIGN KEY (workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_tasks(workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE internet_search_runs (
+        workspace_id TEXT NOT NULL,
+        search_run_id TEXT NOT NULL CHECK(length(search_run_id) = 71 AND substr(search_run_id, 1, 7) = 'sha256:'),
+        investigation_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        adapter_id TEXT NOT NULL CHECK(adapter_id = 'brave-search'),
+        adapter_version TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        query_digest TEXT NOT NULL,
+        result_set_digest TEXT NOT NULL CHECK(length(result_set_digest) = 71 AND substr(result_set_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, search_run_id),
+        UNIQUE (workspace_id, investigation_id, search_run_id),
+        FOREIGN KEY (workspace_id, investigation_id, task_id, workflow_id, segment_id)
+          REFERENCES internet_investigations(workspace_id, investigation_id, task_id, workflow_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE internet_investigation_events (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL CHECK(length(event_id) = 71 AND substr(event_id, 1, 7) = 'sha256:'),
+        investigation_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK(action IN (
+          'created', 'search-succeeded', 'search-failed', 'fetch-succeeded', 'fetch-failed',
+          'proposal-created', 'proposal-revised', 'proposal-approved', 'proposal-rejected'
+        )),
+        category TEXT,
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id),
+        UNIQUE (workspace_id, investigation_id, event_id),
+        FOREIGN KEY (workspace_id, investigation_id)
+          REFERENCES internet_investigations(workspace_id, investigation_id)
+      ) STRICT;
+
+      CREATE TABLE internet_search_results (
+        workspace_id TEXT NOT NULL,
+        search_run_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        result_id TEXT NOT NULL CHECK(length(result_id) = 71 AND substr(result_id, 1, 7) = 'sha256:'),
+        rank INTEGER NOT NULL CHECK(rank BETWEEN 1 AND 20),
+        url TEXT NOT NULL CHECK(length(url) BETWEEN 1 AND 4096),
+        url_digest TEXT NOT NULL CHECK(length(url_digest) = 71 AND substr(url_digest, 1, 7) = 'sha256:'),
+        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 2048),
+        description TEXT NOT NULL CHECK(length(description) <= 8192),
+        result_digest TEXT NOT NULL CHECK(length(result_digest) = 71 AND substr(result_digest, 1, 7) = 'sha256:'),
+        handle_expires_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, result_id),
+        UNIQUE (workspace_id, search_run_id, rank),
+        UNIQUE (workspace_id, investigation_id, result_id),
+        FOREIGN KEY (workspace_id, investigation_id, search_run_id)
+          REFERENCES internet_search_runs(workspace_id, investigation_id, search_run_id)
+      ) STRICT;
+
+      CREATE TABLE internet_fetch_snapshots (
+        workspace_id TEXT NOT NULL,
+        fetch_snapshot_id TEXT NOT NULL CHECK(length(fetch_snapshot_id) = 71 AND substr(fetch_snapshot_id, 1, 7) = 'sha256:'),
+        investigation_id TEXT NOT NULL,
+        search_run_id TEXT NOT NULL,
+        result_id TEXT NOT NULL,
+        requested_url TEXT NOT NULL,
+        final_url TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        fetch_policy_version TEXT NOT NULL,
+        status_code INTEGER NOT NULL CHECK(status_code BETWEEN 200 AND 299),
+        mime_type TEXT NOT NULL CHECK(mime_type IN ('text/html', 'text/plain')),
+        title TEXT NOT NULL CHECK(length(title) <= 2048),
+        extracted_text TEXT NOT NULL CHECK(length(extracted_text) BETWEEN 1 AND 262144),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        snapshot_digest TEXT NOT NULL CHECK(length(snapshot_digest) = 71 AND substr(snapshot_digest, 1, 7) = 'sha256:'),
+        truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
+        diagnostics_json TEXT NOT NULL CHECK(json_valid(diagnostics_json) AND json_type(diagnostics_json) = 'array'),
+        redirects_json TEXT NOT NULL CHECK(json_valid(redirects_json) AND json_type(redirects_json) = 'array'),
+        untrusted INTEGER NOT NULL CHECK(untrusted = 1),
+        PRIMARY KEY (workspace_id, fetch_snapshot_id),
+        UNIQUE (workspace_id, investigation_id, fetch_snapshot_id),
+        FOREIGN KEY (workspace_id, investigation_id, search_run_id)
+          REFERENCES internet_search_runs(workspace_id, investigation_id, search_run_id),
+        FOREIGN KEY (workspace_id, investigation_id, result_id)
+          REFERENCES internet_search_results(workspace_id, investigation_id, result_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposals (
+        workspace_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_id),
+        UNIQUE (workspace_id, investigation_id, proposal_id),
+        FOREIGN KEY (workspace_id, investigation_id, workflow_id, segment_id)
+          REFERENCES internet_investigations(workspace_id, investigation_id, workflow_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_revisions (
+        workspace_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        fetch_snapshot_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK(version >= 1),
+        operation TEXT NOT NULL CHECK(operation IN ('create', 'revise')),
+        fact_id TEXT NOT NULL,
+        base_fact_revision_id TEXT,
+        proposed_source_json TEXT NOT NULL CHECK(json_valid(proposed_source_json) AND json_type(proposed_source_json) = 'object'),
+        proposed_source_digest TEXT NOT NULL CHECK(length(proposed_source_digest) = 71 AND substr(proposed_source_digest, 1, 7) = 'sha256:'),
+        proposal_policy_version TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_revision_id),
+        UNIQUE (workspace_id, proposal_id, version),
+        UNIQUE (workspace_id, proposal_id, proposal_revision_id),
+        CHECK((operation = 'create' AND base_fact_revision_id IS NULL) OR
+              (operation = 'revise' AND base_fact_revision_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, investigation_id, proposal_id)
+          REFERENCES knowledge_proposals(workspace_id, investigation_id, proposal_id),
+        FOREIGN KEY (workspace_id, investigation_id, fetch_snapshot_id)
+          REFERENCES internet_fetch_snapshots(workspace_id, investigation_id, fetch_snapshot_id),
+        FOREIGN KEY (workspace_id, fact_id, base_fact_revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_heads (
+        workspace_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        revision_version INTEGER NOT NULL CHECK(revision_version >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'approved', 'rejected')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER internet_investigations_no_update BEFORE UPDATE ON internet_investigations
+      BEGIN SELECT RAISE(ABORT, 'internet investigation is immutable'); END;
+      CREATE TRIGGER internet_investigations_no_delete BEFORE DELETE ON internet_investigations
+      BEGIN SELECT RAISE(ABORT, 'internet investigation is immutable'); END;
+      CREATE TRIGGER internet_search_runs_no_update BEFORE UPDATE ON internet_search_runs
+      BEGIN SELECT RAISE(ABORT, 'internet search run is immutable'); END;
+      CREATE TRIGGER internet_search_runs_no_delete BEFORE DELETE ON internet_search_runs
+      BEGIN SELECT RAISE(ABORT, 'internet search run is immutable'); END;
+      CREATE TRIGGER internet_investigation_events_no_update BEFORE UPDATE ON internet_investigation_events
+      BEGIN SELECT RAISE(ABORT, 'internet investigation event is append-only'); END;
+      CREATE TRIGGER internet_investigation_events_no_delete BEFORE DELETE ON internet_investigation_events
+      BEGIN SELECT RAISE(ABORT, 'internet investigation event is append-only'); END;
+      CREATE TRIGGER internet_search_results_no_update BEFORE UPDATE ON internet_search_results
+      BEGIN SELECT RAISE(ABORT, 'internet search result is immutable'); END;
+      CREATE TRIGGER internet_search_results_no_delete BEFORE DELETE ON internet_search_results
+      BEGIN SELECT RAISE(ABORT, 'internet search result is immutable'); END;
+      CREATE TRIGGER internet_fetch_snapshots_no_update BEFORE UPDATE ON internet_fetch_snapshots
+      BEGIN SELECT RAISE(ABORT, 'internet fetch snapshot is immutable'); END;
+      CREATE TRIGGER internet_fetch_snapshots_no_delete BEFORE DELETE ON internet_fetch_snapshots
+      BEGIN SELECT RAISE(ABORT, 'internet fetch snapshot is immutable'); END;
+      CREATE TRIGGER knowledge_proposals_no_update BEFORE UPDATE ON knowledge_proposals
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal is immutable'); END;
+      CREATE TRIGGER knowledge_proposals_no_delete BEFORE DELETE ON knowledge_proposals
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_revisions_no_update BEFORE UPDATE ON knowledge_proposal_revisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal revision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_revisions_no_delete BEFORE DELETE ON knowledge_proposal_revisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal revision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_heads_no_delete BEFORE DELETE ON knowledge_proposal_heads
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal head is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_heads_update_guard BEFORE UPDATE ON knowledge_proposal_heads
+      WHEN NEW.version <> OLD.version + 1 OR NOT (
+        (OLD.state = 'draft' AND NEW.state = 'draft' AND NEW.proposal_revision_id <> OLD.proposal_revision_id AND NEW.revision_version = OLD.revision_version + 1) OR
+        (OLD.state = 'draft' AND NEW.state IN ('approved', 'rejected') AND NEW.proposal_revision_id = OLD.proposal_revision_id AND NEW.revision_version = OLD.revision_version)
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid knowledge proposal head update'); END;
+      CREATE TRIGGER knowledge_proposal_decisions_no_update BEFORE UPDATE ON knowledge_proposal_decisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_decisions_no_delete BEFORE DELETE ON knowledge_proposal_decisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
     `,
   }),
 ]);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { stableJson } from "../../src/domain/contracts.mjs";
+import { CURRENT_SCHEMA_VERSION } from "../../src/db/migrations.mjs";
 import { ExportService } from "../../src/export/export-service.mjs";
 import { QualityService } from "../../src/quality/quality-service.mjs";
 import { ReviewConflictError, ReviewService } from "../../src/translation/review-service.mjs";
@@ -10,7 +11,7 @@ import { addCandidate, changedRegistry, fixtureActor, goodText, qualityWorkspace
 test("schema v17 stores immutable traceable quality snapshots", async () => {
   const setup = await qualityWorkspace();
   try {
-    assert.equal(setup.fixture.database.pragma("user_version", { simple: true }), 17);
+    assert.equal(setup.fixture.database.pragma("user_version", { simple: true }), CURRENT_SCHEMA_VERSION);
     const candidate = addCandidate(setup, "请使用工作空间。");
     const run = setup.quality.runCandidate(setup.workflow.workflowId, setup.workflow.segments[0].segmentId, candidate.candidateId);
     assert.ok(run.findings.some((item) => item.ruleId.endsWith("preferred") && item.severity === "error"));
