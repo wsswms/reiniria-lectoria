@@ -22,7 +22,7 @@ export async function workspace() {
   return fixture;
 }
 
-export function seedWorkflow(fixture) {
+export function seedWorkflow(fixture, { targetLanguage = "zh-CN", sourceText = "source" } = {}) {
   const documentId = randomUUID();
   const sourceRevisionId = randomUUID();
   const segmentId = randomUUID();
@@ -32,9 +32,9 @@ export function seedWorkflow(fixture) {
   fixture.database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(fixture.workspaceId, sourceRevisionId, documentId, sha("original"), sha("normalized"), timestamp);
   fixture.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)").run(fixture.workspaceId, documentId, segmentId, timestamp);
   fixture.database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(fixture.workspaceId, documentId, sourceRevisionId, segmentId, "paragraph", "/0", "source", sha("source"), 0, 1, "[]", "initial");
-  new DomainStateService(fixture.database, fixture.workspaceId, { now: fixture.clock.now }).create({ workflowId, documentId, sourceRevisionId, targetLanguage: "zh-CN" }, {}, "source-confirmed");
-  return { workflowId, documentId, sourceRevisionId, segmentId, targetLanguage: "zh-CN" };
+    .run(fixture.workspaceId, documentId, sourceRevisionId, segmentId, "paragraph", "/0", sourceText, sha(sourceText), 0, 1, "[]", "initial");
+  new DomainStateService(fixture.database, fixture.workspaceId, { now: fixture.clock.now }).create({ workflowId, documentId, sourceRevisionId, targetLanguage }, {}, "source-confirmed");
+  return { workflowId, documentId, sourceRevisionId, segmentId, targetLanguage };
 }
 
 export function enqueueInput(workflow, suffix = randomUUID(), overrides = {}) {

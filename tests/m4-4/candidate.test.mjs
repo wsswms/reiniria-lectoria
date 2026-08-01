@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { DeterministicFakeProvider, FaultInjectingFakeProvider } from "../../src/provider/fake-provider.mjs";
 import { parseModelResponse } from "../../src/provider/model-response.mjs";
 import { MachineCandidateService } from "../../src/translation/machine-candidate-service.mjs";
 import { ReviewConflictError } from "../../src/translation/review-service.mjs";
@@ -14,6 +15,61 @@ function complete(fixture, context, service) {
   const parsed = parseModelResponse(response, context);
   service.complete(lease.attempt_id, running.version, "worker", parsed.outputDigest);
   return { attemptId: lease.attempt_id, response, parsed };
+}
+
+test("two fake providers produce deterministic multilingual candidates and provenance over twenty repeats", async () => {
+  const fixture = await workspace();
+  try {
+    for (const [targetLanguage, sourceText] of [["zh-CN", "A concise English source."], ["en", "简洁的中文原文。"], ["ja", "簡潔な日本語の原文。"]]) {
+      const workflow = seedWorkflow(fixture, { targetLanguage, sourceText });
+      const { context, task } = enqueueWithContext(fixture, workflow, `multilingual-${targetLanguage}`);
+      const attempt = task.attempts[0];
+      const request = {
+        workspaceId: fixture.workspaceId,
+        taskId: task.task.task_id,
+        attemptId: attempt.attempt_id,
+        workflowId: workflow.workflowId,
+        sourceRevisionId: workflow.sourceRevisionId,
+        targetLanguage,
+        providerId: attempt.provider_id,
+        modelId: attempt.model_id,
+        promptVersion: attempt.prompt_version,
+        contextDigest: context.contextDigest,
+        segments: context.manifest.segments.map((segment) => ({
+          segmentId: segment.segmentId,
+          sourceDigest: segment.sourceDigest,
+          sourceText: segment.sourceText,
+          protected: segment.protected,
+        })),
+      };
+      const primary = new DeterministicFakeProvider({ id: "fake-primary" });
+      const noisy = new FaultInjectingFakeProvider({ id: "fake-primary", mode: "success-with-private-fields" });
+      const normalized = [];
+      for (let repeat = 0; repeat < 20; repeat += 1) {
+        normalized.push(await primary.invoke(request), await noisy.invoke(request));
+        assert.equal(buildContextDigest(fixture, workflow), context.contextDigest);
+      }
+      assert.equal(new Set(normalized.map(JSON.stringify)).size, 1);
+      const providerResponse = normalized[0];
+      const strictResponse = responseFor(context, (segment) => providerResponse.candidates.find((item) => item.segmentId === segment.segmentId).text);
+      const parsed = parseModelResponse(strictResponse, context);
+      const service = orchestrator(fixture);
+      const lease = service.leaseNext(`worker-${targetLanguage}`, 1_000);
+      const running = service.startProvider(lease.attempt_id, lease.version, lease.leaseHolder);
+      service.complete(lease.attempt_id, running.version, lease.leaseHolder, parsed.outputDigest);
+      const machine = new MachineCandidateService(fixture.database, fixture.workspaceId, { now: fixture.clock.now });
+      const candidate = machine.accept(lease.attempt_id, strictResponse);
+      const provenance = machine.workCopies.getMachineProvenance(candidate.candidateId);
+      assert.equal(candidate.candidateId, lease.attempt_id);
+      assert.equal(provenance.contextDigest, context.contextDigest);
+      assert.equal(provenance.outputDigest, parsed.outputDigest);
+    }
+  } finally { await fixture.close(); }
+});
+
+function buildContextDigest(fixture, workflow) {
+  return fixture.database.prepare("SELECT context_digest AS contextDigest FROM translation_attempts WHERE workspace_id = ? AND workflow_id = ? LIMIT 1")
+    .get(fixture.workspaceId, workflow.workflowId).contextDigest;
 }
 
 test("completed outcomes become immutable provenance-bound candidates without changing the working copy", async () => {
