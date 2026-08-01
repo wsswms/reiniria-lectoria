@@ -45,6 +45,8 @@ test("capability gateway exposes only bounded trusted-scope term and knowledge r
       { query: "workspace", topK: 8, workspaceId: randomUUID() },
       { query: "workspace", topK: 8, language: "ja" },
       { query: "workspace", topK: 8, kinds: ["term", "knowledge"] },
+      { query: "workspace", topK: 8, factId: randomUUID() },
+      { query: "workspace", topK: 8, filter: { documentIds: [] } },
       { query: "workspace", topK: 8, path: "../../private" },
       { query: "workspace", topK: 8, retriever: "embedding" },
       { query: "workspace", topK: 9 },
