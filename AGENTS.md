@@ -72,9 +72,9 @@
 - M4 Runner 最终运行层固定为 distroless Node.js 22 Debian 13 digest `sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50`；完整 Runner 镜像的 Docker Scout 严重/高危扫描为 0/0。依赖构建层和统一测试镜像仍固定既有 Node.js 22.19 基线。
 - M4.5 已实现 `google-gemini`、`openai`、`deepseek` 三个固定域名 Adapter、严格响应/用量归一化、预算、文件描述符凭据注入和 Broker→低权限 Pi Runner→控制面执行链；真实验收选择 DeepSeek V4 Flash，其余 Provider 仅完成离线契约验证。
 - M5.1～M5.6、ADR-020～ADR-025 与父阶段完成审计已通过；Brave Search、独立 Search/Fetch 网络代理、互联网证据、仅用户可批准的知识提案、批准后事实修订、索引/stale 迭代及恢复闭环完成，公开 PR #7 已 squash 合并为 `8bac532`。
-- 独立 M5R 已完成规划基线化但仍为未开始；M5R 在复用 M5 Search/Fetch/Proposal 链的前提下增加用户批准的多轮研究、原子预算、Research Runner、Source/Citation/Claim/ResearchReport 和多来源知识提案。M5 保持已完成，M6 硬依赖 M5R，M5R 父阶段完成前不得启动 M6。
-- M5R 规划授权不包含公开实现、依赖安装、schema 修改或阶段启动；开始 M5R/M5R.1 前仍需用户单独授权，并从最新 `main` 创建符合命名约定的独立功能分支。
+- 独立 M5R 已获实施授权并从公开 PR #8 的 squash merge `1f0beec` 启动；公开实现分支为 `feat-m5r-research`。M5R 在复用 M5 Search/Fetch/Proposal 链的前提下增加用户批准的多轮研究、原子预算、Research Runner、Source/Citation/Claim/ResearchReport 和多来源知识提案。M5 保持已完成，M6 硬依赖 M5R，M5R 父阶段完成前不得启动 M6。
+- 当前推进 M5R.1：固定 schema v20、ResearchRequest/Grant/Run/Query/Source/Citation/Claim/ResearchReport 契约、威胁边界和 90 案例离线评测基线；默认断网，不读取真实 Key。
 - M5R 第一版不自动回顾、撤销或重写历史人工译文；知识更新后仅由用户人工触发重新翻译。固定 90 案例以离线 fixture 为主，真实 Search、Fetch、内容服务、研究模型和真实用户文档继续分别门禁。
 - 后续阶段的新依赖仍须按对应计划锁定、审查并更新 SBOM；不得提前安装依赖或加入占位实现。
-- M4/M5 的既有真实验证授权均已随对应阶段完成而结束。用户允许未来 M5R 真实 Brave 门禁复用仓库外 `0600` Brave Key 文件，并单独授权最多 10 次公开合成 Search、估算费用硬上限 1 美元、不保存完整原始响应或 Key；该授权只能在 M5R 前置离线子阶段通过后按固定 manifest 执行，当前规划工作不得读取 Key 或调用服务。Serper、真实公网 Fetch、Tavily Search/Extract、真实研究模型/API 和真实用户文档仍未授权。
+- M4/M5 的既有真实验证授权均已随对应阶段完成而结束。用户允许 M5R.4a 真实 Brave 门禁复用仓库外 `0600` Brave Key 文件，并单独授权最多 10 次公开合成 Search、估算费用硬上限 1 美元、不保存完整原始响应或 Key；该授权只能在 M5R 前置离线子阶段通过后按固定 manifest 执行。Serper、真实公网 Fetch、Tavily Search/Extract、真实研究模型/API 和真实用户文档仍未授权。
 - M8 的 Embedding/Rerank 工作是可选、证据驱动且需单独授权的实验，不得因接口已经预留而提前实现。
