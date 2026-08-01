@@ -15,7 +15,7 @@ async function readStream(stream, maximum) {
 
 try {
   const envelope = JSON.parse(await readStream(process.stdin, 4 * 1024 * 1024));
-  const resolver = createCredentialResolver(async () => readStream(createReadStream(null, { fd: 3 }), 16 * 1024));
+  const resolver = createCredentialResolver(async () => (await readStream(createReadStream(null, { fd: 3 }), 16 * 1024)).trim());
   const broker = createProviderBroker({
     adapters: createProviderRegistry({ faultMode: envelope.faultMode ?? "transport" }),
     credentialResolver: resolver,

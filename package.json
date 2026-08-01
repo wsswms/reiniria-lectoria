@@ -26,7 +26,8 @@
     "compare:sqlite": "node scripts/compare-sqlite-options.mjs",
     "measure:m2.1": "node scripts/measure-m2-1.mjs",
     "measure:m2.2": "node scripts/measure-m2-2.mjs",
-    "measure:m2.3": "node scripts/measure-m2-3.mjs"
+    "measure:m2.3": "node scripts/measure-m2-3.mjs",
+    "preflight:m4.5:real": "node scripts/preflight-real-provider.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",

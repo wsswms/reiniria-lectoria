@@ -1,7 +1,7 @@
 import { providerErrorContract, providerRequestContract, providerResponseContract } from "./contracts.mjs";
 
-export const GEMINI_PROVIDER_ID = "google-gemini";
-export const GEMINI_API_ORIGIN = "https://generativelanguage.googleapis.com";
+export const OPENAI_PROVIDER_ID = "openai";
+export const OPENAI_API_ORIGIN = "https://api.openai.com";
 
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -13,20 +13,21 @@ const SYSTEM_INSTRUCTION = [
   "Return exactly one candidate for each segment, in the supplied order, using only the declared JSON schema.",
 ].join(" ");
 
-class GeminiProviderError extends Error {
+class OpenAIProviderError extends Error {
   constructor(contract) {
     const normalized = providerErrorContract(contract);
     super(normalized.message);
-    this.name = "GeminiProviderError";
+    this.name = "OpenAIProviderError";
     this.category = normalized.category;
     this.retryable = normalized.retryable;
     if (normalized.providerCode !== undefined) this.providerCode = normalized.providerCode;
   }
 }
+
 function failure(category, retryable, providerCode) {
-  return new GeminiProviderError({
+  return new OpenAIProviderError({
     category,
-    message: "Gemini provider invocation failed",
+    message: "OpenAI provider invocation failed",
     retryable,
     ...(providerCode === undefined ? {} : { providerCode: String(providerCode) }),
   });
@@ -56,11 +57,8 @@ function responseSchema(segmentIds) {
   };
 }
 
-export function buildGeminiRequest(input) {
-  const request = providerRequestContract(input);
-  if (request.providerId !== GEMINI_PROVIDER_ID) throw new TypeError("providerId does not match Gemini adapter");
-  if (!MODEL_ID.test(request.modelId)) throw new TypeError("Gemini modelId is invalid");
-  const segments = request.segments.map((segment) => ({
+function outboundSegments(request) {
+  return request.segments.map((segment) => ({
     segmentId: segment.segmentId,
     sourceText: segment.sourceText,
     protected: segment.protected.map((item) => ({
@@ -69,16 +67,26 @@ export function buildGeminiRequest(input) {
       value: item.value,
     })),
   }));
+}
+
+export function buildOpenAIRequest(input) {
+  const request = providerRequestContract(input);
+  if (request.providerId !== OPENAI_PROVIDER_ID) throw new TypeError("providerId does not match OpenAI adapter");
+  if (!MODEL_ID.test(request.modelId)) throw new TypeError("OpenAI modelId is invalid");
   return Object.freeze({
-    url: `${GEMINI_API_ORIGIN}/v1beta/models/${encodeURIComponent(request.modelId)}:generateContent`,
+    url: `${OPENAI_API_ORIGIN}/v1/responses`,
     body: Object.freeze({
-      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-      contents: [{ role: "user", parts: [{ text: JSON.stringify({ targetLanguage: request.targetLanguage, segments }) }] }],
-      generationConfig: {
-        temperature: 0,
-        candidateCount: 1,
-        responseMimeType: "application/json",
-        responseJsonSchema: responseSchema(request.segments.map((segment) => segment.segmentId)),
+      model: request.modelId,
+      store: false,
+      instructions: SYSTEM_INSTRUCTION,
+      input: JSON.stringify({ targetLanguage: request.targetLanguage, segments: outboundSegments(request) }),
+      text: {
+        format: {
+          type: "json_schema",
+          name: "lectoria_translation",
+          strict: true,
+          schema: responseSchema(request.segments.map((segment) => segment.segmentId)),
+        },
       },
     }),
   });
@@ -118,78 +126,67 @@ function httpFailure(status) {
 }
 
 function exactCandidates(value, request) {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => key !== "candidates")) {
-    throw failure("malformed-response", false);
-  }
-  if (!Array.isArray(value.candidates) || value.candidates.length !== request.segments.length) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => key !== "candidates")
+    || !Array.isArray(value.candidates) || value.candidates.length !== request.segments.length) {
     throw failure("malformed-response", false);
   }
   return value.candidates.map((candidate, index) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)
       || Object.keys(candidate).sort().join(",") !== "segmentId,text"
       || candidate.segmentId !== request.segments[index].segmentId
-      || typeof candidate.text !== "string") {
-      throw failure("malformed-response", false);
-    }
+      || typeof candidate.text !== "string") throw failure("malformed-response", false);
     return candidate;
   });
 }
 
-export function normalizeGeminiResponse(input, requestInput) {
+export function normalizeOpenAIResponse(input, requestInput) {
   const request = providerRequestContract(requestInput);
   try {
-    if (!input || typeof input !== "object" || typeof input.responseId !== "string" || input.responseId.length === 0) {
-      throw failure("malformed-response", false);
+    if (!input || typeof input !== "object" || typeof input.id !== "string" || input.id.length === 0) throw failure("malformed-response", false);
+    if (input.status !== "completed" || input.incomplete_details != null || !Array.isArray(input.output)) {
+      throw failure(input.status === "incomplete" ? "provider" : "malformed-response", false);
     }
-    if (!Array.isArray(input.candidates) || input.candidates.length !== 1) throw failure("malformed-response", false);
-    const modelCandidate = input.candidates[0];
-    if (modelCandidate.finishReason !== "STOP" || !Array.isArray(modelCandidate.content?.parts)
-      || modelCandidate.content.parts.length !== 1 || typeof modelCandidate.content.parts[0]?.text !== "string") {
-      const policyReasons = new Set(["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"]);
-      if (policyReasons.has(modelCandidate?.finishReason)) throw failure("policy", false);
-      throw failure("malformed-response", false);
-    }
-    const decoded = JSON.parse(modelCandidate.content.parts[0].text);
-    const candidates = exactCandidates(decoded, request);
-    const metadata = input.usageMetadata;
-    const inputTokens = metadata?.promptTokenCount;
-    const candidateTokens = metadata?.candidatesTokenCount;
-    const reportedTotal = metadata?.totalTokenCount;
-    const cachedInputTokens = metadata?.cachedContentTokenCount ?? 0;
-    if (![inputTokens, candidateTokens, reportedTotal, cachedInputTokens].every((value) => Number.isSafeInteger(value) && value >= 0)
-      || reportedTotal < inputTokens || cachedInputTokens > inputTokens) {
-      throw failure("malformed-response", false);
-    }
-    const outputTokens = Math.max(candidateTokens, reportedTotal - inputTokens);
+    const contents = input.output.flatMap((item) => Array.isArray(item?.content) ? item.content : []);
+    if (contents.some((item) => item?.type === "refusal")) throw failure("policy", false);
+    const outputTexts = contents.filter((item) => item?.type === "output_text" && typeof item.text === "string");
+    if (outputTexts.length !== 1) throw failure("malformed-response", false);
+    const candidates = exactCandidates(JSON.parse(outputTexts[0].text), request);
+    const usage = input.usage;
+    const inputTokens = usage?.input_tokens;
+    const outputTokens = usage?.output_tokens;
+    const totalTokens = usage?.total_tokens;
+    const cachedInputTokens = usage?.input_tokens_details?.cached_tokens ?? 0;
+    if (![inputTokens, outputTokens, totalTokens, cachedInputTokens].every((value) => Number.isSafeInteger(value) && value >= 0)
+      || cachedInputTokens > inputTokens || totalTokens !== inputTokens + outputTokens) throw failure("malformed-response", false);
     return providerResponseContract({
-      responseId: input.responseId,
+      responseId: input.id,
       providerId: request.providerId,
       modelId: request.modelId,
       candidates,
-      usage: { inputTokens, outputTokens, cachedInputTokens, totalTokens: inputTokens + outputTokens },
+      usage: { inputTokens, outputTokens, cachedInputTokens, totalTokens },
     }, request);
   } catch (error) {
-    if (error instanceof GeminiProviderError) throw error;
+    if (error instanceof OpenAIProviderError) throw error;
     throw failure("malformed-response", false);
   }
 }
 
-export class GoogleGeminiProvider {
+export class OpenAIProvider {
   constructor({ fetchImpl = globalThis.fetch } = {}) {
-    if (typeof fetchImpl !== "function") throw new TypeError("Gemini fetch implementation is required");
-    this.id = GEMINI_PROVIDER_ID;
+    if (typeof fetchImpl !== "function") throw new TypeError("OpenAI fetch implementation is required");
+    this.id = OPENAI_PROVIDER_ID;
     this.fetchImpl = fetchImpl;
   }
 
   async invoke(input, { credential, signal } = {}) {
     const request = providerRequestContract(input);
-    const outbound = buildGeminiRequest(request);
+    const outbound = buildOpenAIRequest(request);
     if (typeof credential !== "string" || credential.length === 0 || /\s/.test(credential)) throw failure("auth", false);
     let response;
     try {
       response = await this.fetchImpl(outbound.url, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": credential },
+        headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
         body: JSON.stringify(outbound.body),
         redirect: "error",
         signal,
@@ -200,13 +197,11 @@ export class GoogleGeminiProvider {
     }
     if (!response || typeof response.status !== "number") throw failure("malformed-response", false);
     if (!response.ok) throw httpFailure(response.status);
-    let payload;
     try {
-      payload = JSON.parse(await boundedResponseText(response));
+      return normalizeOpenAIResponse(JSON.parse(await boundedResponseText(response)), request);
     } catch (error) {
-      if (error instanceof GeminiProviderError) throw error;
+      if (error instanceof OpenAIProviderError) throw error;
       throw failure("malformed-response", false);
     }
-    return normalizeGeminiResponse(payload, request);
   }
 }

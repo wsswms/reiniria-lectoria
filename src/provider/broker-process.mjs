@@ -9,17 +9,20 @@ export class BrokerProcessError extends Error {
   }
 }
 
-export function invokeBrokerProcess({ request, credentialRef, credential, faultMode }, {
+export function invokeBrokerProcess({ request, credentialRef, credential, credentialFd, faultMode }, {
   entry = new URL("./broker-entry.mjs", import.meta.url), timeoutMs = 5_000, outputBytes = 4 * 1024 * 1024,
 } = {}) {
-  if (typeof credential !== "string" || credential.length === 0 || Buffer.byteLength(credential) > 16 * 1024) {
+  const stringCredential = typeof credential === "string";
+  const descriptorCredential = Number.isSafeInteger(credentialFd) && credentialFd >= 0;
+  if (stringCredential === descriptorCredential
+    || (stringCredential && (credential.length === 0 || Buffer.byteLength(credential) > 16 * 1024))) {
     throw new TypeError("broker credential is invalid");
   }
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [entry instanceof URL ? entry.pathname : entry], {
       cwd: tmpdir(),
       env: Object.freeze({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", NODE_ENV: "production" }),
-      stdio: ["pipe", "pipe", "ignore", "pipe"],
+      stdio: ["pipe", "pipe", "ignore", descriptorCredential ? credentialFd : "pipe"],
       shell: false,
     });
     const chunks = [];
@@ -49,8 +52,8 @@ export function invokeBrokerProcess({ request, credentialRef, credential, faultM
       }
     });
     child.stdin.on("error", () => {});
-    child.stdio[3].on("error", () => {});
+    child.stdio[3]?.on("error", () => {});
     child.stdin.end(JSON.stringify({ request, credentialRef, faultMode }));
-    child.stdio[3].end(credential);
+    if (stringCredential) child.stdio[3].end(credential);
   });
 }

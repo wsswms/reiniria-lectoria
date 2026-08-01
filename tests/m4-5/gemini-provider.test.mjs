@@ -9,6 +9,8 @@ import {
   buildGeminiRequest,
 } from "../../src/provider/gemini-provider.mjs";
 import { createProviderRegistry } from "../../src/provider/provider-registry.mjs";
+import { OPENAI_PROVIDER_ID } from "../../src/provider/openai-provider.mjs";
+import { DEEPSEEK_PROVIDER_ID } from "../../src/provider/deepseek-provider.mjs";
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 function request(segments = 2) {
@@ -119,7 +121,7 @@ test("Broker registry allowlists Gemini and returns only provider-neutral normal
   const input = request(1);
   const secret = `GEMINI-SECRET-${randomUUID()}`;
   const registry = createProviderRegistry({ fetchImpl: async () => new Response(JSON.stringify(success(input)), { status: 200 }) });
-  assert.deepEqual([...registry.keys()], ["fake-primary", "fake-fault", GEMINI_PROVIDER_ID]);
+  assert.deepEqual([...registry.keys()], ["fake-primary", "fake-fault", GEMINI_PROVIDER_ID, OPENAI_PROVIDER_ID, DEEPSEEK_PROVIDER_ID]);
   const broker = createProviderBroker({ adapters: registry, credentialResolver: createCredentialResolver(async () => secret) });
   const response = await broker.invoke({ request: input, credentialRef: "local:gemini/m4" });
   assert.deepEqual(Object.keys(response), ["responseId", "providerId", "modelId", "candidates", "usage"]);
