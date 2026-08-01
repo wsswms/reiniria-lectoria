@@ -13,7 +13,7 @@ export const user = Object.freeze({ type: "user", id: "m5r-2-user" });
 export const model = Object.freeze({ type: "model", id: "m5r-2-gap-detector" });
 export const system = Object.freeze({ type: "system", id: "m5r-2-control-plane" });
 
-export async function researchWorkspace({ limits = {}, providerBudgets = {}, adapterOverrides = {} } = {}) {
+export async function researchWorkspace({ limits = {}, providerBudgets = {}, adapterOverrides = {}, searchProviderId = "fake-search" } = {}) {
   const setup = await evidenceWorkspace();
   const bound = enqueueEvidence(setup, capture(setup), randomUUID());
   let milliseconds = 0;
@@ -28,8 +28,8 @@ export async function researchWorkspace({ limits = {}, providerBudgets = {}, ada
   foundation.decideRequest(request.requestId, 1, "approved", user);
   const grantInput = { schemaVersion: "1.0", grantId: randomUUID(), requestId: request.requestId, requestRevisionId: request.revisionId,
     providers: [
-      { capability: "search", providerId: "fake-search", fallbackOrder: 0,
-        budget: { maxSearchCalls: 12, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0, ...providerBudgets["fake-search"] } },
+      { capability: "search", providerId: searchProviderId, fallbackOrder: 0,
+        budget: { maxSearchCalls: 12, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0, ...providerBudgets[searchProviderId] } },
       { capability: "extract", providerId: "fake-content", fallbackOrder: 0,
         budget: { maxSearchCalls: 0, maxContentUrls: 16, maxModelTokens: 0, maxCostMicrosUsd: 0, ...providerBudgets["fake-content"] } },
       { capability: "research-model", providerId: "fake-research-model", fallbackOrder: 0,
@@ -53,7 +53,7 @@ export async function researchWorkspace({ limits = {}, providerBudgets = {}, ada
   const budgets = new ResearchBudgetService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const evidence = new ResearchEvidenceService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const capabilities = new ResearchCapabilityService(setup.fixture.database, setup.fixture.workspaceId, { key: Buffer.alloc(32, 9), now });
-  const adapters = new Map([["fake-search", search], ["fake-content", content], ["fake-research-model", researchModel]]);
+  const adapters = new Map([[searchProviderId, search], ["fake-content", content], ["fake-research-model", researchModel]]);
   const gateway = new ResearchToolGateway(setup.fixture.database, setup.fixture.workspaceId, { capabilities, budgets, evidence, adapters, now });
   return { setup, bound, now, advance(amount) { milliseconds += amount; }, foundation, request, grant: issued.grant, runs,
     run: runs.get(run.runId), search, content, researchModel, budgets, evidence, capabilities, gateway,

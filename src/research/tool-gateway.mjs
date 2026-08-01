@@ -16,9 +16,10 @@ export class ResearchToolGateway {
   async search(token, runId, input) {
     this.capabilities.verify(token, { runId, tool: "propose-query", capability: "search", providerId: input.providerId });
     const adapter = this.#adapter(input.providerId, "search");
+    const estimate = adapter.estimatedUsage ?? { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 0 };
     const reservation = this.budgets.reserve(runId, { round: input.round, capability: "search", providerId: input.providerId,
       query: input.query, language: input.language, country: input.country, idempotencyKey: input.idempotencyKey,
-      estimate: { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 0 } });
+      estimate });
     if (reservation.entries.length !== 1 || reservation.entries[0].entryType !== "reserved") throw new ResearchConflictError("terminal tool receipt cannot execute twice");
     try {
       const response = await adapter.search({ query: input.query, count: input.count, country: input.country, searchLanguage: input.language });
@@ -26,7 +27,7 @@ export class ResearchToolGateway {
       this.budgets.settle(reservation.queryId, response.usage, { responseDigest: response.responseDigest, adapterVersion: response.adapterVersion });
       return Object.freeze({ ...response, queryId: reservation.queryId, artifactRunId: artifacts.artifactRunId, results: artifacts.results });
     } catch (error) {
-      this.budgets.unknown(reservation.queryId, { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 0 }, { category: error?.category ?? "unknown" });
+      this.budgets.unknown(reservation.queryId, estimate, { category: error?.category ?? "unknown" });
       throw error;
     }
   }
