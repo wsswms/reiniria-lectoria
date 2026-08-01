@@ -90,6 +90,7 @@ export class BraveSearchAdapter {
       }, redirect: "error", signal });
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw failure("canceled", false);
+      if (error?.name === "TimeoutError") throw failure("timeout", true);
       throw failure("unknown-outcome", false);
     }
     if (!response || typeof response.status !== "number") throw failure("malformed-response", false);

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "m5r-brave-real-result-v1",
+  "conclusion": "conditional-go",
+  "scope": "public-non-sensitive-search-only",
+  "providerId": "brave-search",
+  "adapterVersion": "brave-web-search-v1",
+  "manifestDigest": "sha256:8445e161f462e6fbccc198131f7236fa76c157ef9981e0f6e3499ad56e8f6c35",
+  "calls": 3,
+  "usage": { "searchCalls": 3, "contentUrls": 0, "modelTokens": 0, "costMicrosUsd": 15000 },
+  "startedAt": "2026-08-01T18:03:30.177Z",
+  "completedAt": "2026-08-01T18:03:34.099Z",
+  "observations": [
+    { "id": "iana-example-domains", "resultCount": 3, "uniqueOriginCount": 2, "responseDigest": "sha256:ed84979907c32b3fcceaec2af1540cce35230676707c6fdee387eb77601289f4", "latencyMs": 1457 },
+    { "id": "sqlite-fts5-docs", "resultCount": 3, "uniqueOriginCount": 3, "responseDigest": "sha256:32856eb93c10bc1efb4a2d4efcc880f77c5e3c04c99e39781b07e5d99e435748", "latencyMs": 1130 },
+    { "id": "unicode-cldr-glossary", "resultCount": 3, "uniqueOriginCount": 1, "responseDigest": "sha256:31ba38cbac1a24b40af462a56b7b4d0f569ee51b03682dd897c0d00a8674ffe1", "latencyMs": 1335 }
+  ],
+  "policy": { "maximumQueryRetentionDays": 90, "zeroDataRetention": "enterprise-optional", "processingRegions": null },
+  "rawResponsePersisted": false,
+  "unauthorizedServicesCalled": []
+}

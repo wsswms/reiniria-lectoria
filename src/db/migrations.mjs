@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -2047,6 +2047,420 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
       CREATE TRIGGER knowledge_proposal_applications_no_delete BEFORE DELETE ON knowledge_proposal_applications
       BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 20,
+    name: "controlled-multi-round-research-foundation",
+    sql: `
+      CREATE TABLE research_requests (
+        workspace_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, request_id),
+        UNIQUE (workspace_id, request_id, task_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_tasks(workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language)
+      ) STRICT;
+
+      CREATE TABLE research_request_segments (
+        workspace_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, request_id, segment_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES research_requests(workspace_id, request_id),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE research_request_revisions (
+        workspace_id TEXT NOT NULL,
+        request_revision_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        contract_version TEXT NOT NULL CHECK(contract_version = '1.0'),
+        request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'model', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, request_revision_id),
+        UNIQUE (workspace_id, request_id, revision),
+        UNIQUE (workspace_id, request_id, request_revision_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES research_requests(workspace_id, request_id)
+      ) STRICT;
+
+      CREATE TABLE research_request_heads (
+        workspace_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        request_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'approved', 'rejected', 'canceled')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, request_id),
+        FOREIGN KEY (workspace_id, request_id, request_revision_id)
+          REFERENCES research_request_revisions(workspace_id, request_id, request_revision_id)
+      ) STRICT;
+
+      CREATE TABLE research_request_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        request_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected', 'canceled')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, request_id),
+        UNIQUE (workspace_id, decision_id, request_id, request_revision_id, decision),
+        FOREIGN KEY (workspace_id, request_id, request_revision_id)
+          REFERENCES research_request_revisions(workspace_id, request_id, request_revision_id)
+      ) STRICT;
+
+      CREATE TABLE research_grants (
+        workspace_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        request_revision_id TEXT NOT NULL,
+        approval_decision_id TEXT NOT NULL,
+        approval_decision TEXT NOT NULL CHECK(approval_decision = 'approved'),
+        contract_version TEXT NOT NULL CHECK(contract_version = '1.0'),
+        grant_json TEXT NOT NULL CHECK(json_valid(grant_json) AND json_type(grant_json) = 'object'),
+        grant_digest TEXT NOT NULL CHECK(length(grant_digest) = 71 AND substr(grant_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        approved_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL CHECK(expires_at > approved_at),
+        PRIMARY KEY (workspace_id, grant_id),
+        UNIQUE (workspace_id, request_id, request_revision_id),
+        FOREIGN KEY (workspace_id, approval_decision_id, request_id, request_revision_id, approval_decision)
+          REFERENCES research_request_decisions(workspace_id, decision_id, request_id, request_revision_id, decision)
+      ) STRICT;
+
+      CREATE TABLE research_grant_revocations (
+        workspace_id TEXT NOT NULL,
+        revocation_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        revoked_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, revocation_id),
+        UNIQUE (workspace_id, grant_id),
+        FOREIGN KEY (workspace_id, grant_id) REFERENCES research_grants(workspace_id, grant_id)
+      ) STRICT;
+
+      CREATE TABLE research_runs (
+        workspace_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        deadline_at TEXT NOT NULL CHECK(deadline_at > created_at),
+        PRIMARY KEY (workspace_id, run_id),
+        UNIQUE (workspace_id, grant_id, attempt),
+        UNIQUE (workspace_id, grant_id, run_id),
+        FOREIGN KEY (workspace_id, grant_id) REFERENCES research_grants(workspace_id, grant_id)
+      ) STRICT;
+
+      CREATE TABLE research_run_events (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        state TEXT NOT NULL CHECK(state IN ('queued', 'running', 'paused', 'completed', 'failed', 'canceled')),
+        reason TEXT,
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id),
+        UNIQUE (workspace_id, run_id, ordinal),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id)
+      ) STRICT;
+
+      CREATE TABLE research_queries (
+        workspace_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        round INTEGER NOT NULL CHECK(round BETWEEN 1 AND 10),
+        capability TEXT NOT NULL CHECK(capability IN ('search', 'fetch', 'extract', 'research-model')),
+        provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 127),
+        query_text TEXT NOT NULL CHECK(length(query_text) BETWEEN 1 AND 2048),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        idempotency_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, query_id),
+        UNIQUE (workspace_id, run_id, idempotency_key),
+        UNIQUE (workspace_id, run_id, query_id),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id)
+      ) STRICT;
+
+      CREATE TABLE research_budget_ledger (
+        workspace_id TEXT NOT NULL,
+        entry_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        entry_type TEXT NOT NULL CHECK(entry_type IN ('reserved', 'settled', 'released', 'unknown')),
+        search_calls INTEGER NOT NULL CHECK(search_calls >= 0),
+        content_urls INTEGER NOT NULL CHECK(content_urls >= 0),
+        model_tokens INTEGER NOT NULL CHECK(model_tokens >= 0),
+        cost_micros_usd INTEGER NOT NULL CHECK(cost_micros_usd >= 0),
+        usage_json TEXT NOT NULL CHECK(json_valid(usage_json) AND json_type(usage_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, entry_id),
+        UNIQUE (workspace_id, query_id, entry_type),
+        FOREIGN KEY (workspace_id, grant_id, run_id) REFERENCES research_runs(workspace_id, grant_id, run_id),
+        FOREIGN KEY (workspace_id, run_id, query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TABLE provider_content_snapshots (
+        workspace_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        canonical_url TEXT NOT NULL CHECK(length(canonical_url) BETWEEN 1 AND 4096),
+        content_text TEXT NOT NULL CHECK(length(content_text) BETWEEN 1 AND 262144),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        snapshot_digest TEXT NOT NULL CHECK(length(snapshot_digest) = 71 AND substr(snapshot_digest, 1, 7) = 'sha256:'),
+        lineage TEXT NOT NULL CHECK(lineage = 'provider-processed'),
+        untrusted INTEGER NOT NULL CHECK(untrusted = 1),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, snapshot_id),
+        UNIQUE (workspace_id, run_id, snapshot_id),
+        FOREIGN KEY (workspace_id, run_id, query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TABLE research_sources (
+        workspace_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        canonical_url TEXT NOT NULL CHECK(length(canonical_url) BETWEEN 1 AND 4096),
+        url_digest TEXT NOT NULL CHECK(length(url_digest) = 71 AND substr(url_digest, 1, 7) = 'sha256:'),
+        source_cluster_id TEXT NOT NULL,
+        tier TEXT NOT NULL CHECK(tier IN ('S1', 'S2', 'S3', 'S4', 'S5')),
+        lineage TEXT NOT NULL CHECK(lineage IN ('direct', 'provider-processed', 'search-snippet')),
+        artifact_type TEXT NOT NULL CHECK(artifact_type IN ('search-result', 'fetch-snapshot', 'provider-content-snapshot')),
+        artifact_id TEXT NOT NULL,
+        artifact_digest TEXT NOT NULL CHECK(length(artifact_digest) = 71 AND substr(artifact_digest, 1, 7) = 'sha256:'),
+        retrieved_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, source_id),
+        UNIQUE (workspace_id, run_id, source_id),
+        CHECK(NOT (lineage = 'provider-processed' AND artifact_type = 'fetch-snapshot')),
+        FOREIGN KEY (workspace_id, run_id, query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TABLE research_citations (
+        workspace_id TEXT NOT NULL,
+        citation_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        quote_text TEXT NOT NULL CHECK(length(quote_text) BETWEEN 1 AND 16384),
+        quote_digest TEXT NOT NULL CHECK(length(quote_digest) = 71 AND substr(quote_digest, 1, 7) = 'sha256:'),
+        locator_json TEXT NOT NULL CHECK(json_valid(locator_json) AND json_type(locator_json) = 'object'),
+        verified INTEGER NOT NULL CHECK(verified IN (0, 1)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, citation_id),
+        UNIQUE (workspace_id, run_id, citation_id),
+        FOREIGN KEY (workspace_id, run_id, source_id) REFERENCES research_sources(workspace_id, run_id, source_id)
+      ) STRICT;
+
+      CREATE TABLE research_claims (
+        workspace_id TEXT NOT NULL,
+        claim_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        claim_text TEXT NOT NULL CHECK(length(claim_text) BETWEEN 1 AND 16384),
+        claim_digest TEXT NOT NULL CHECK(length(claim_digest) = 71 AND substr(claim_digest, 1, 7) = 'sha256:'),
+        support_level TEXT NOT NULL CHECK(support_level IN ('C0', 'C1', 'C2', 'C3', 'CD', 'CI')),
+        inference INTEGER NOT NULL CHECK(inference IN (0, 1)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, claim_id),
+        UNIQUE (workspace_id, run_id, claim_id),
+        CHECK(NOT (support_level IN ('C2', 'C3') AND inference = 1)),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id)
+      ) STRICT;
+
+      CREATE TABLE research_claim_citations (
+        workspace_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        claim_id TEXT NOT NULL,
+        citation_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, claim_id, citation_id),
+        FOREIGN KEY (workspace_id, run_id, claim_id) REFERENCES research_claims(workspace_id, run_id, claim_id),
+        FOREIGN KEY (workspace_id, run_id, citation_id) REFERENCES research_citations(workspace_id, run_id, citation_id)
+      ) STRICT;
+
+      CREATE TABLE research_reports (
+        workspace_id TEXT NOT NULL,
+        report_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('supported', 'disputed', 'insufficient', 'partial')),
+        stop_reason TEXT NOT NULL,
+        report_json TEXT NOT NULL CHECK(json_valid(report_json) AND json_type(report_json) = 'object'),
+        report_digest TEXT NOT NULL CHECK(length(report_digest) = 71 AND substr(report_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, report_id),
+        UNIQUE (workspace_id, run_id),
+        UNIQUE (workspace_id, run_id, report_id),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id)
+      ) STRICT;
+
+      CREATE TABLE research_report_claims (
+        workspace_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        report_id TEXT NOT NULL,
+        claim_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        PRIMARY KEY (workspace_id, report_id, claim_id),
+        UNIQUE (workspace_id, report_id, ordinal),
+        FOREIGN KEY (workspace_id, run_id, report_id) REFERENCES research_reports(workspace_id, run_id, report_id),
+        FOREIGN KEY (workspace_id, run_id, claim_id) REFERENCES research_claims(workspace_id, run_id, claim_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_research_evidence (
+        workspace_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        report_id TEXT NOT NULL,
+        claim_id TEXT NOT NULL,
+        citation_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        PRIMARY KEY (workspace_id, proposal_revision_id, claim_id, citation_id),
+        UNIQUE (workspace_id, proposal_revision_id, ordinal),
+        FOREIGN KEY (workspace_id, proposal_revision_id) REFERENCES knowledge_proposal_revisions(workspace_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, report_id, claim_id) REFERENCES research_report_claims(workspace_id, report_id, claim_id),
+        FOREIGN KEY (workspace_id, claim_id, citation_id) REFERENCES research_claim_citations(workspace_id, claim_id, citation_id)
+      ) STRICT;
+
+      CREATE TABLE research_cache_inventory_entries (
+        workspace_id TEXT NOT NULL,
+        inventory_id TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        relative_location TEXT NOT NULL,
+        byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+        sensitivity TEXT NOT NULL CHECK(sensitivity IN ('public', 'untrusted-public', 'private-derived')),
+        backup_relation TEXT NOT NULL CHECK(backup_relation IN ('included', 'excluded', 'manifest-only')),
+        rebuildable INTEGER NOT NULL CHECK(rebuildable IN (0, 1)),
+        cleanup_recommendation TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, inventory_id),
+        UNIQUE (workspace_id, artifact_type, artifact_id),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TRIGGER research_request_heads_no_delete BEFORE DELETE ON research_request_heads
+      BEGIN SELECT RAISE(ABORT, 'research request head is append-only by version'); END;
+      CREATE TRIGGER research_request_heads_update_guard BEFORE UPDATE ON research_request_heads
+      WHEN NEW.version <> OLD.version + 1 OR NOT (
+        (OLD.state = 'draft' AND NEW.state = 'draft' AND NEW.request_revision_id <> OLD.request_revision_id AND NEW.revision = OLD.revision + 1) OR
+        (OLD.state = 'draft' AND NEW.state = 'pending-user' AND NEW.request_revision_id = OLD.request_revision_id AND NEW.revision = OLD.revision) OR
+        (OLD.state = 'pending-user' AND NEW.state = 'draft' AND NEW.request_revision_id <> OLD.request_revision_id AND NEW.revision = OLD.revision + 1) OR
+        (OLD.state = 'pending-user' AND NEW.state IN ('approved', 'rejected', 'canceled') AND NEW.request_revision_id = OLD.request_revision_id AND NEW.revision = OLD.revision)
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid research request head update'); END;
+
+      CREATE TRIGGER research_requests_no_update BEFORE UPDATE ON research_requests BEGIN SELECT RAISE(ABORT, 'research request is immutable'); END;
+      CREATE TRIGGER research_requests_no_delete BEFORE DELETE ON research_requests BEGIN SELECT RAISE(ABORT, 'research request is immutable'); END;
+      CREATE TRIGGER research_request_segments_no_update BEFORE UPDATE ON research_request_segments BEGIN SELECT RAISE(ABORT, 'research request segment is immutable'); END;
+      CREATE TRIGGER research_request_segments_no_delete BEFORE DELETE ON research_request_segments BEGIN SELECT RAISE(ABORT, 'research request segment is immutable'); END;
+      CREATE TRIGGER research_request_revisions_no_update BEFORE UPDATE ON research_request_revisions BEGIN SELECT RAISE(ABORT, 'research request revision is immutable'); END;
+      CREATE TRIGGER research_request_revisions_no_delete BEFORE DELETE ON research_request_revisions BEGIN SELECT RAISE(ABORT, 'research request revision is immutable'); END;
+      CREATE TRIGGER research_request_decisions_no_update BEFORE UPDATE ON research_request_decisions BEGIN SELECT RAISE(ABORT, 'research request decision is immutable'); END;
+      CREATE TRIGGER research_request_decisions_no_delete BEFORE DELETE ON research_request_decisions BEGIN SELECT RAISE(ABORT, 'research request decision is immutable'); END;
+      CREATE TRIGGER research_grants_no_update BEFORE UPDATE ON research_grants BEGIN SELECT RAISE(ABORT, 'research grant is immutable'); END;
+      CREATE TRIGGER research_grants_no_delete BEFORE DELETE ON research_grants BEGIN SELECT RAISE(ABORT, 'research grant is immutable'); END;
+      CREATE TRIGGER research_grant_revocations_no_update BEFORE UPDATE ON research_grant_revocations BEGIN SELECT RAISE(ABORT, 'research grant revocation is immutable'); END;
+      CREATE TRIGGER research_grant_revocations_no_delete BEFORE DELETE ON research_grant_revocations BEGIN SELECT RAISE(ABORT, 'research grant revocation is immutable'); END;
+      CREATE TRIGGER research_runs_no_update BEFORE UPDATE ON research_runs BEGIN SELECT RAISE(ABORT, 'research run is immutable'); END;
+      CREATE TRIGGER research_runs_no_delete BEFORE DELETE ON research_runs BEGIN SELECT RAISE(ABORT, 'research run is immutable'); END;
+      CREATE TRIGGER research_run_events_no_update BEFORE UPDATE ON research_run_events BEGIN SELECT RAISE(ABORT, 'research run event is append-only'); END;
+      CREATE TRIGGER research_run_events_no_delete BEFORE DELETE ON research_run_events BEGIN SELECT RAISE(ABORT, 'research run event is append-only'); END;
+      CREATE TRIGGER research_queries_no_update BEFORE UPDATE ON research_queries BEGIN SELECT RAISE(ABORT, 'research query is immutable'); END;
+      CREATE TRIGGER research_queries_no_delete BEFORE DELETE ON research_queries BEGIN SELECT RAISE(ABORT, 'research query is immutable'); END;
+      CREATE TRIGGER research_budget_ledger_no_update BEFORE UPDATE ON research_budget_ledger BEGIN SELECT RAISE(ABORT, 'research budget ledger is append-only'); END;
+      CREATE TRIGGER research_budget_ledger_no_delete BEFORE DELETE ON research_budget_ledger BEGIN SELECT RAISE(ABORT, 'research budget ledger is append-only'); END;
+      CREATE TRIGGER provider_content_snapshots_no_update BEFORE UPDATE ON provider_content_snapshots BEGIN SELECT RAISE(ABORT, 'provider content snapshot is immutable'); END;
+      CREATE TRIGGER provider_content_snapshots_no_delete BEFORE DELETE ON provider_content_snapshots BEGIN SELECT RAISE(ABORT, 'provider content snapshot is immutable'); END;
+      CREATE TRIGGER research_sources_no_update BEFORE UPDATE ON research_sources BEGIN SELECT RAISE(ABORT, 'research source is immutable'); END;
+      CREATE TRIGGER research_sources_no_delete BEFORE DELETE ON research_sources BEGIN SELECT RAISE(ABORT, 'research source is immutable'); END;
+      CREATE TRIGGER research_citations_no_update BEFORE UPDATE ON research_citations BEGIN SELECT RAISE(ABORT, 'research citation is immutable'); END;
+      CREATE TRIGGER research_citations_no_delete BEFORE DELETE ON research_citations BEGIN SELECT RAISE(ABORT, 'research citation is immutable'); END;
+      CREATE TRIGGER research_claims_no_update BEFORE UPDATE ON research_claims BEGIN SELECT RAISE(ABORT, 'research claim is immutable'); END;
+      CREATE TRIGGER research_claims_no_delete BEFORE DELETE ON research_claims BEGIN SELECT RAISE(ABORT, 'research claim is immutable'); END;
+      CREATE TRIGGER research_claim_citations_no_update BEFORE UPDATE ON research_claim_citations BEGIN SELECT RAISE(ABORT, 'research claim citation is immutable'); END;
+      CREATE TRIGGER research_claim_citations_no_delete BEFORE DELETE ON research_claim_citations BEGIN SELECT RAISE(ABORT, 'research claim citation is immutable'); END;
+      CREATE TRIGGER research_reports_no_update BEFORE UPDATE ON research_reports BEGIN SELECT RAISE(ABORT, 'research report is immutable'); END;
+      CREATE TRIGGER research_reports_no_delete BEFORE DELETE ON research_reports BEGIN SELECT RAISE(ABORT, 'research report is immutable'); END;
+      CREATE TRIGGER research_report_claims_no_update BEFORE UPDATE ON research_report_claims BEGIN SELECT RAISE(ABORT, 'research report claim is immutable'); END;
+      CREATE TRIGGER research_report_claims_no_delete BEFORE DELETE ON research_report_claims BEGIN SELECT RAISE(ABORT, 'research report claim is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_research_evidence_no_update BEFORE UPDATE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_research_evidence_no_delete BEFORE DELETE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
+      CREATE TRIGGER research_cache_inventory_entries_no_update BEFORE UPDATE ON research_cache_inventory_entries BEGIN SELECT RAISE(ABORT, 'research cache inventory is immutable'); END;
+      CREATE TRIGGER research_cache_inventory_entries_no_delete BEFORE DELETE ON research_cache_inventory_entries BEGIN SELECT RAISE(ABORT, 'research cache inventory is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 21,
+    name: "provider-neutral-web-artifacts",
+    sql: `
+      CREATE TABLE web_search_artifact_runs (
+        workspace_id TEXT NOT NULL,
+        artifact_run_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL CHECK(scope_kind IN ('legacy-investigation', 'research-query')),
+        investigation_id TEXT,
+        research_run_id TEXT,
+        research_query_id TEXT,
+        adapter_id TEXT NOT NULL CHECK(length(adapter_id) BETWEEN 1 AND 127),
+        adapter_version TEXT NOT NULL CHECK(length(adapter_version) BETWEEN 1 AND 128),
+        policy_version TEXT NOT NULL CHECK(length(policy_version) BETWEEN 1 AND 128),
+        query_digest TEXT NOT NULL CHECK(length(query_digest) = 71 AND substr(query_digest, 1, 7) = 'sha256:'),
+        result_set_digest TEXT NOT NULL CHECK(length(result_set_digest) = 71 AND substr(result_set_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, artifact_run_id),
+        CHECK((scope_kind = 'legacy-investigation' AND investigation_id IS NOT NULL AND research_run_id IS NULL AND research_query_id IS NULL)
+          OR (scope_kind = 'research-query' AND investigation_id IS NULL AND research_run_id IS NOT NULL AND research_query_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, investigation_id) REFERENCES internet_investigations(workspace_id, investigation_id),
+        FOREIGN KEY (workspace_id, research_run_id, research_query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TABLE web_search_artifact_results (
+        workspace_id TEXT NOT NULL,
+        artifact_run_id TEXT NOT NULL,
+        result_id TEXT NOT NULL,
+        rank INTEGER NOT NULL CHECK(rank BETWEEN 1 AND 20),
+        url TEXT NOT NULL CHECK(length(url) BETWEEN 1 AND 4096),
+        url_digest TEXT NOT NULL CHECK(length(url_digest) = 71 AND substr(url_digest, 1, 7) = 'sha256:'),
+        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 2048),
+        description TEXT NOT NULL CHECK(length(description) <= 8192),
+        result_digest TEXT NOT NULL CHECK(length(result_digest) = 71 AND substr(result_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, result_id),
+        UNIQUE (workspace_id, artifact_run_id, rank),
+        FOREIGN KEY (workspace_id, artifact_run_id) REFERENCES web_search_artifact_runs(workspace_id, artifact_run_id)
+      ) STRICT;
+
+      INSERT INTO web_search_artifact_runs
+        SELECT workspace_id, search_run_id, 'legacy-investigation', investigation_id, NULL, NULL, adapter_id,
+          adapter_version, policy_version, query_digest, result_set_digest, created_at FROM internet_search_runs;
+      INSERT INTO web_search_artifact_results
+        SELECT workspace_id, search_run_id, result_id, rank, url, url_digest, title, description, result_digest,
+          (SELECT created_at FROM internet_search_runs run WHERE run.workspace_id = result.workspace_id AND run.search_run_id = result.search_run_id)
+        FROM internet_search_results result;
+
+      CREATE TRIGGER web_search_artifact_runs_no_update BEFORE UPDATE ON web_search_artifact_runs BEGIN SELECT RAISE(ABORT, 'web search artifact run is immutable'); END;
+      CREATE TRIGGER web_search_artifact_runs_no_delete BEFORE DELETE ON web_search_artifact_runs BEGIN SELECT RAISE(ABORT, 'web search artifact run is immutable'); END;
+      CREATE TRIGGER web_search_artifact_results_no_update BEFORE UPDATE ON web_search_artifact_results BEGIN SELECT RAISE(ABORT, 'web search artifact result is immutable'); END;
+      CREATE TRIGGER web_search_artifact_results_no_delete BEFORE DELETE ON web_search_artifact_results BEGIN SELECT RAISE(ABORT, 'web search artifact result is immutable'); END;
     `,
   }),
 ]);

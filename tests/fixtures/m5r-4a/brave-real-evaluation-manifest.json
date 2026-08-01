@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "m5r-brave-real-evaluation-v1",
+  "providerId": "brave-search",
+  "adapterVersion": "brave-web-search-v1",
+  "origin": "https://api.search.brave.com",
+  "credentialRef": "external-file:brave-search/m5r",
+  "dataClass": "public-synthetic",
+  "maximumCalls": 3,
+  "authorizedMaxCostMicrosUsd": 1000000,
+  "costMicrosUsdPerCall": 5000,
+  "rawResponseRetention": false,
+  "credentialInjection": "fd-3",
+  "queries": [
+    { "id": "iana-example-domains", "query": "IANA example domains documentation", "count": 3, "country": "US", "searchLanguage": "en", "dataClass": "public-synthetic" },
+    { "id": "sqlite-fts5-docs", "query": "SQLite FTS5 official documentation", "count": 3, "country": "US", "searchLanguage": "en", "dataClass": "public-synthetic" },
+    { "id": "unicode-cldr-glossary", "query": "Unicode CLDR translation terminology documentation", "count": 3, "country": "US", "searchLanguage": "en", "dataClass": "public-synthetic" }
+  ],
+  "policySnapshot": {
+    "observedAt": "2026-08-02",
+    "pricing": { "url": "https://brave.com/search/api/", "usdPerThousandRequests": 5 },
+    "terms": { "url": "https://api-dashboard.search.brave.com/documentation/resources/terms-of-service", "lastUpdated": "2026-02-11" },
+    "privacy": { "url": "https://api-dashboard.search.brave.com/documentation/resources/privacy-notice", "maximumQueryRetentionDays": 90, "zeroDataRetention": "enterprise-optional" },
+    "processingRegions": null
+  }
+}
