@@ -93,6 +93,7 @@ test("executor completes task, normalized usage, budget reconciliation and immut
     });
     const result = await executor.executeNext();
     assert.equal(result.status, "completed");
+    assert.equal(invocation.request.maxOutputTokens, 1_024);
     assert.equal(invocation.options.credentialRef, "local:gemini/m4");
     assert.equal("credential" in invocation.options, false);
     assert.equal(setup.tasks.getTask(setup.created.task.task_id).task.state, "completed");

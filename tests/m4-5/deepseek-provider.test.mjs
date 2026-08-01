@@ -12,7 +12,7 @@ const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex"
 function request(segments = 2) {
   return {
     workspaceId: randomUUID(), taskId: randomUUID(), attemptId: randomUUID(), workflowId: randomUUID(), sourceRevisionId: randomUUID(),
-    targetLanguage: "ja", providerId: DEEPSEEK_PROVIDER_ID, modelId: "deepseek-chat", promptVersion: "prompt-v1", contextDigest: sha("context"),
+    targetLanguage: "ja", providerId: DEEPSEEK_PROVIDER_ID, modelId: "deepseek-chat", maxOutputTokens: 321, promptVersion: "prompt-v1", contextDigest: sha("context"),
     segments: Array.from({ length: segments }, (_, index) => ({
       segmentId: randomUUID(), sourceDigest: sha(`source-${index}`), sourceText: `Public source ${index}`,
       protected: index === 0 ? [{ kind: "code", marker: "__C0__", value: "npm test" }] : [],
@@ -50,8 +50,11 @@ test("DeepSeek request uses fixed endpoint, bearer auth and JSON Object mode wit
   assert.equal(observation.init.headers.authorization, `Bearer ${secret}`);
   const body = JSON.parse(observation.init.body);
   assert.deepEqual(body.response_format, { type: "json_object" });
+  assert.deepEqual(body.thinking, { type: "disabled" });
+  assert.equal(body.max_tokens, 321);
   assert.equal(body.stream, false);
   assert.match(body.messages[0].content, /valid JSON/);
+  assert.match(body.messages[0].content, /\{\"candidates\"/);
   for (const id of [input.workspaceId, input.taskId, input.attemptId, input.workflowId, input.sourceRevisionId]) {
     assert.equal(observation.init.body.includes(id), false);
   }

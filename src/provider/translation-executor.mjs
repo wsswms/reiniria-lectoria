@@ -112,6 +112,7 @@ export class TranslationExecutor {
       targetLanguage: lease.target_language,
       providerId: lease.provider_id,
       modelId: lease.model_id,
+      maxOutputTokens: this.estimatedOutputTokens,
       promptVersion: lease.prompt_version,
       contextDigest: lease.context_digest,
       segments: context.manifest.segments.map((segment) => ({

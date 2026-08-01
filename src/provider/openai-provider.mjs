@@ -78,6 +78,7 @@ export function buildOpenAIRequest(input) {
     body: Object.freeze({
       model: request.modelId,
       store: false,
+      max_output_tokens: request.maxOutputTokens,
       instructions: SYSTEM_INSTRUCTION,
       input: JSON.stringify({ targetLanguage: request.targetLanguage, segments: outboundSegments(request) }),
       text: {

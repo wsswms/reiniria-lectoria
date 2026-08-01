@@ -20,6 +20,7 @@ function requestFixture(overrides = {}) {
     targetLanguage: "ZH-hans-cn",
     providerId: "fake-primary",
     modelId: "fixture-model-v1",
+    maxOutputTokens: 321,
     promptVersion: "prompt-v1",
     contextDigest: sha("context"),
     segments: [
@@ -39,6 +40,7 @@ test("provider requests are canonical, immutable and exclude unrecognized secret
     nested: { authorization: canary },
   });
   assert.equal(request.targetLanguage, "zh-Hans-CN");
+  assert.equal(request.maxOutputTokens, 321);
   assert.equal(JSON.stringify(request).includes(canary), false);
   assert.equal(Object.isFrozen(request), true);
   assert.equal(Object.isFrozen(request.segments), true);
@@ -62,6 +64,7 @@ test("provider responses require an exact one-to-one segment set and normalized 
   assert.throws(() => providerResponseContract({ ...response, candidates: response.candidates.slice(1) }, request), /segment set/);
   assert.throws(() => providerResponseContract({ ...response, candidates: [response.candidates[0], response.candidates[0]] }, request), /segment set/);
   assert.throws(() => providerResponseContract({ ...response, candidates: [...response.candidates, { segmentId: randomUUID(), text: "x" }] }, request), /segment set/);
+  assert.throws(() => providerResponseContract({ ...response, usage: { inputTokens: 25, outputTokens: 322, cachedInputTokens: 5, totalTokens: 347 } }, request), /maxOutputTokens/);
 });
 
 test("usage and errors use provider-neutral bounded classifications", () => {
@@ -84,4 +87,6 @@ test("malformed provider identities and segment contracts fail closed", () => {
   assert.throws(() => providerRequestContract({ ...fixture, segments: [] }), /segments/);
   assert.throws(() => providerRequestContract({ ...fixture, segments: [fixture.segments[0], fixture.segments[0]] }), /duplicate segmentId/);
   assert.throws(() => providerRequestContract({ ...fixture, contextDigest: "sha256:bad" }), /contextDigest/);
+  assert.throws(() => providerRequestContract({ ...fixture, maxOutputTokens: 0 }), /maxOutputTokens/);
+  assert.throws(() => providerRequestContract({ ...fixture, maxOutputTokens: 1_000_001 }), /maxOutputTokens/);
 });

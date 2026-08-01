@@ -77,6 +77,7 @@ export function buildGeminiRequest(input) {
       generationConfig: {
         temperature: 0,
         candidateCount: 1,
+        maxOutputTokens: request.maxOutputTokens,
         responseMimeType: "application/json",
         responseJsonSchema: responseSchema(request.segments.map((segment) => segment.segmentId)),
       },

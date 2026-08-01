@@ -12,6 +12,7 @@ const SYSTEM_INSTRUCTION = [
   "Preserve every protected marker exactly.",
   "Return valid JSON with exactly one candidate for each segment, in the supplied order.",
   "The JSON object must contain only candidates; every candidate must contain only segmentId and text.",
+  'Example JSON: {"candidates":[{"segmentId":"00000000-0000-4000-8000-000000000000","text":"translated text"}]}.',
 ].join(" ");
 
 class DeepSeekProviderError extends Error {
@@ -56,6 +57,8 @@ export function buildDeepSeekRequest(input) {
         { role: "user", content: JSON.stringify({ targetLanguage: request.targetLanguage, segments }) },
       ],
       response_format: { type: "json_object" },
+      thinking: { type: "disabled" },
+      max_tokens: request.maxOutputTokens,
       stream: false,
     }),
   });

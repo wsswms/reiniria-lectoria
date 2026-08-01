@@ -5,6 +5,7 @@ const ERROR_CATEGORIES = new Set([
   "policy", "budget", "canceled", "unknown-outcome", "provider",
 ]);
 const NEVER_RETRY = new Set(["auth", "malformed-response", "policy", "budget", "canceled", "unknown-outcome"]);
+const MAX_OUTPUT_TOKENS = 1_000_000;
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -23,6 +24,13 @@ function digest(value, name) {
 
 function integer(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative safe integer`);
+  return value;
+}
+
+function positiveInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_OUTPUT_TOKENS) {
+    throw new TypeError(`${name} must be a positive safe integer no greater than ${MAX_OUTPUT_TOKENS}`);
+  }
   return value;
 }
 
@@ -74,6 +82,7 @@ export function providerRequestContract(input) {
     targetLanguage: language(input.targetLanguage),
     providerId: requiredString(input.providerId, "providerId"),
     modelId: requiredString(input.modelId, "modelId"),
+    maxOutputTokens: positiveInteger(input.maxOutputTokens ?? 1_024, "maxOutputTokens"),
     promptVersion: requiredString(input.promptVersion, "promptVersion"),
     contextDigest: digest(input.contextDigest, "contextDigest"),
     segments: Object.freeze(segments),
@@ -108,12 +117,14 @@ export function providerResponseContract(input, requestInput) {
   }
   if (input.providerId !== request.providerId) throw new TypeError("providerId does not match request");
   if (input.modelId !== request.modelId) throw new TypeError("modelId does not match request");
+  const usage = providerUsageContract(input.usage);
+  if (usage.outputTokens > request.maxOutputTokens) throw new TypeError("outputTokens cannot exceed maxOutputTokens");
   return Object.freeze({
     responseId: requiredString(input.responseId, "responseId"),
     providerId: request.providerId,
     modelId: request.modelId,
     candidates: Object.freeze(candidates),
-    usage: providerUsageContract(input.usage),
+    usage,
   });
 }
 
