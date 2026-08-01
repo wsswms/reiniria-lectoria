@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1385,6 +1385,123 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'invalid budget reservation transition'); END;
       CREATE TRIGGER budget_reservations_no_delete BEFORE DELETE ON budget_reservations
       BEGIN SELECT RAISE(ABORT, 'budget reservation is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 15,
+    name: "knowledge-fact-version-foundation",
+    sql: `
+      CREATE TABLE knowledge_facts (
+        workspace_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'style', 'knowledge')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, fact_id),
+        UNIQUE (workspace_id, fact_id, kind),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_fact_revisions (
+        workspace_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'style', 'knowledge')),
+        version INTEGER NOT NULL CHECK(version >= 1),
+        language TEXT NOT NULL,
+        scope_json TEXT NOT NULL CHECK(json_valid(scope_json) AND json_type(scope_json) = 'object'),
+        content_json TEXT NOT NULL CHECK(json_valid(content_json) AND json_type(content_json) = 'object'),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        object_id TEXT NOT NULL,
+        source_path TEXT NOT NULL CHECK(
+          source_path = (CASE kind
+            WHEN 'term' THEN 'dictionary/'
+            WHEN 'style' THEN 'style/'
+            WHEN 'knowledge' THEN 'knowledge/'
+          END) || fact_id || '/' || revision_id || '.json'
+        ),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, revision_id),
+        UNIQUE (workspace_id, fact_id, version),
+        UNIQUE (workspace_id, fact_id, revision_id),
+        UNIQUE (workspace_id, fact_id, kind, revision_id),
+        FOREIGN KEY (workspace_id, fact_id, kind)
+          REFERENCES knowledge_facts(workspace_id, fact_id, kind),
+        FOREIGN KEY (workspace_id, object_id)
+          REFERENCES committed_objects(workspace_id, object_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_fact_heads (
+        workspace_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'style', 'knowledge')),
+        revision_id TEXT NOT NULL,
+        revision_version INTEGER NOT NULL CHECK(revision_version >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('active', 'inactive')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, fact_id),
+        FOREIGN KEY (workspace_id, fact_id, kind)
+          REFERENCES knowledge_facts(workspace_id, fact_id, kind),
+        FOREIGN KEY (workspace_id, fact_id, kind, revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, kind, revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_fact_scope_documents (
+        workspace_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, revision_id, document_id),
+        FOREIGN KEY (workspace_id, fact_id, revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id),
+        FOREIGN KEY (workspace_id, document_id)
+          REFERENCES documents(workspace_id, document_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_fact_events (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK(action IN ('created', 'revised', 'activated', 'deactivated')),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id),
+        FOREIGN KEY (workspace_id, fact_id, revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER knowledge_facts_no_update BEFORE UPDATE ON knowledge_facts
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact is immutable'); END;
+      CREATE TRIGGER knowledge_facts_no_delete BEFORE DELETE ON knowledge_facts
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact is immutable'); END;
+      CREATE TRIGGER knowledge_fact_revisions_no_update BEFORE UPDATE ON knowledge_fact_revisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact revision is immutable'); END;
+      CREATE TRIGGER knowledge_fact_revisions_no_delete BEFORE DELETE ON knowledge_fact_revisions
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact revision is immutable'); END;
+      CREATE TRIGGER knowledge_fact_scope_documents_no_update BEFORE UPDATE ON knowledge_fact_scope_documents
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact scope is immutable'); END;
+      CREATE TRIGGER knowledge_fact_scope_documents_no_delete BEFORE DELETE ON knowledge_fact_scope_documents
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact scope is immutable'); END;
+      CREATE TRIGGER knowledge_fact_events_no_update BEFORE UPDATE ON knowledge_fact_events
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact event is append-only'); END;
+      CREATE TRIGGER knowledge_fact_events_no_delete BEFORE DELETE ON knowledge_fact_events
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact event is append-only'); END;
+      CREATE TRIGGER knowledge_fact_heads_no_delete BEFORE DELETE ON knowledge_fact_heads
+      BEGIN SELECT RAISE(ABORT, 'knowledge fact head is immutable'); END;
+      CREATE TRIGGER knowledge_fact_heads_update_guard BEFORE UPDATE ON knowledge_fact_heads
+      WHEN NEW.fact_id <> OLD.fact_id OR NEW.kind <> OLD.kind
+        OR NEW.version <> OLD.version + 1
+        OR NOT (
+          (NEW.revision_id <> OLD.revision_id AND NEW.revision_version = OLD.revision_version + 1 AND NEW.state = OLD.state) OR
+          (NEW.revision_id = OLD.revision_id AND NEW.revision_version = OLD.revision_version
+            AND (OLD.state || '->' || NEW.state) IN ('active->inactive', 'inactive->active'))
+        )
+      BEGIN SELECT RAISE(ABORT, 'invalid knowledge fact head update'); END;
     `,
   }),
 ]);
