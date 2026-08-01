@@ -3,6 +3,7 @@ import { stableJson } from "../domain/contracts.mjs";
 import { searchResponseContract } from "./contracts.mjs";
 import { BRAVE_SEARCH_ADAPTER_VERSION } from "./brave-search-adapter.mjs";
 import { FETCH_POLICY_VERSION } from "./fetch-proxy.mjs";
+import { WebSearchArtifactService } from "../research/web-search-artifact-service.mjs";
 
 export const SEARCH_POLICY_VERSION = "internet-search-policy-v1";
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -44,6 +45,7 @@ export class InvestigationService {
     this.fetchPolicyVersion = fetchPolicyVersion;
     this.investigationTtlMs = investigationTtlMs;
     this.handleTtlMs = handleTtlMs;
+    this.webArtifacts = new WebSearchArtifactService(database, trustedWorkspaceId, { now });
   }
 
   create(input, actorInput) {
@@ -119,6 +121,7 @@ export class InvestigationService {
             item.title, item.description, item.resultDigest, handleExpiresAt);
       }
       this.#event(investigationId, "search-succeeded", null, { searchRunId, resultSetDigest });
+      this.webArtifacts.recordLegacy(searchRunId);
     })();
     return this.getSearchRun(searchRunId);
   }

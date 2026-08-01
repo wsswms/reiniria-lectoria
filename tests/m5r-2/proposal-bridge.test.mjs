@@ -54,6 +54,11 @@ test("one supported report creates multiple independent existing proposal revisi
   try {
     const researchReport = await report(fixture);
     const legacy = await legacyEvidence(fixture);
+    const queryId = fixture.setup.fixture.database.prepare("SELECT query_id AS queryId FROM research_queries WHERE workspace_id = ? AND run_id = ? ORDER BY query_id LIMIT 1")
+      .get(fixture.setup.fixture.workspaceId, fixture.run.runId).queryId;
+    const direct = fixture.evidence.addSource(fixture.run.runId, queryId, { canonicalUrl: legacy.fetched.finalUrl, tier: "S2",
+      lineage: "direct", artifactType: "fetch-snapshot", artifactId: legacy.fetched.fetchSnapshotId });
+    assert.equal(direct.lineage, "direct");
     const proposedSources = ["workspace", "archive"].map((term) => termInput({ factId: randomUUID(), revisionId: randomUUID(), language: "en",
       scope: { targetLanguages: ["zh-CN"], tags: [], documentIds: [fixture.setup.workflow.documentId] },
       content: { term, preferredTranslations: [{ language: "zh-CN", text: term === "workspace" ? "工作区" : "归档" }],

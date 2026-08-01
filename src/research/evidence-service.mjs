@@ -147,13 +147,22 @@ export class ResearchEvidenceService {
     }
     if (type === "fetch-snapshot") {
       const row = this.database.prepare(`SELECT final_url AS url, extracted_text AS content, content_digest AS contentDigest,
-        snapshot_digest AS artifactDigest FROM internet_fetch_snapshots WHERE workspace_id = ? AND fetch_snapshot_id = ?`).get(this.workspaceId, id);
+        snapshot_digest AS artifactDigest FROM internet_fetch_snapshots snapshot
+        JOIN internet_investigations investigation ON investigation.workspace_id = snapshot.workspace_id AND investigation.investigation_id = snapshot.investigation_id
+        JOIN research_runs run ON run.workspace_id = snapshot.workspace_id AND run.run_id = ?
+        JOIN research_grants grant_record ON grant_record.workspace_id = run.workspace_id AND grant_record.grant_id = run.grant_id
+        JOIN research_requests request ON request.workspace_id = grant_record.workspace_id AND request.request_id = grant_record.request_id
+        WHERE snapshot.workspace_id = ? AND snapshot.fetch_snapshot_id = ? AND investigation.workflow_id = request.workflow_id
+          AND investigation.source_revision_id = request.source_revision_id AND investigation.target_language = request.target_language
+          AND EXISTS (SELECT 1 FROM research_request_segments segment WHERE segment.workspace_id = request.workspace_id
+            AND segment.request_id = request.request_id AND segment.segment_id = investigation.segment_id)`)
+        .get(runId, this.workspaceId, id);
       if (!row || sha(row.content) !== row.contentDigest) throw new ResearchConflictError("fetch artifact is unavailable or corrupted");
       return row;
     }
     if (type === "search-result") {
       const row = this.database.prepare(`SELECT url, title || char(10) || description AS content, result_digest AS artifactDigest
-        FROM internet_search_results WHERE workspace_id = ? AND result_id = ?`).get(this.workspaceId, id);
+        FROM web_search_artifact_results WHERE workspace_id = ? AND result_id = ?`).get(this.workspaceId, id);
       if (!row) throw new ResearchConflictError("search artifact is unavailable");
       return { ...row, contentDigest: sha(row.content) };
     }

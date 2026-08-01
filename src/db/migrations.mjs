@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -2407,6 +2407,60 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER knowledge_proposal_research_evidence_no_delete BEFORE DELETE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
       CREATE TRIGGER research_cache_inventory_entries_no_update BEFORE UPDATE ON research_cache_inventory_entries BEGIN SELECT RAISE(ABORT, 'research cache inventory is immutable'); END;
       CREATE TRIGGER research_cache_inventory_entries_no_delete BEFORE DELETE ON research_cache_inventory_entries BEGIN SELECT RAISE(ABORT, 'research cache inventory is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 21,
+    name: "provider-neutral-web-artifacts",
+    sql: `
+      CREATE TABLE web_search_artifact_runs (
+        workspace_id TEXT NOT NULL,
+        artifact_run_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL CHECK(scope_kind IN ('legacy-investigation', 'research-query')),
+        investigation_id TEXT,
+        research_run_id TEXT,
+        research_query_id TEXT,
+        adapter_id TEXT NOT NULL CHECK(length(adapter_id) BETWEEN 1 AND 127),
+        adapter_version TEXT NOT NULL CHECK(length(adapter_version) BETWEEN 1 AND 128),
+        policy_version TEXT NOT NULL CHECK(length(policy_version) BETWEEN 1 AND 128),
+        query_digest TEXT NOT NULL CHECK(length(query_digest) = 71 AND substr(query_digest, 1, 7) = 'sha256:'),
+        result_set_digest TEXT NOT NULL CHECK(length(result_set_digest) = 71 AND substr(result_set_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, artifact_run_id),
+        CHECK((scope_kind = 'legacy-investigation' AND investigation_id IS NOT NULL AND research_run_id IS NULL AND research_query_id IS NULL)
+          OR (scope_kind = 'research-query' AND investigation_id IS NULL AND research_run_id IS NOT NULL AND research_query_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, investigation_id) REFERENCES internet_investigations(workspace_id, investigation_id),
+        FOREIGN KEY (workspace_id, research_run_id, research_query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TABLE web_search_artifact_results (
+        workspace_id TEXT NOT NULL,
+        artifact_run_id TEXT NOT NULL,
+        result_id TEXT NOT NULL,
+        rank INTEGER NOT NULL CHECK(rank BETWEEN 1 AND 20),
+        url TEXT NOT NULL CHECK(length(url) BETWEEN 1 AND 4096),
+        url_digest TEXT NOT NULL CHECK(length(url_digest) = 71 AND substr(url_digest, 1, 7) = 'sha256:'),
+        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 2048),
+        description TEXT NOT NULL CHECK(length(description) <= 8192),
+        result_digest TEXT NOT NULL CHECK(length(result_digest) = 71 AND substr(result_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, result_id),
+        UNIQUE (workspace_id, artifact_run_id, rank),
+        FOREIGN KEY (workspace_id, artifact_run_id) REFERENCES web_search_artifact_runs(workspace_id, artifact_run_id)
+      ) STRICT;
+
+      INSERT INTO web_search_artifact_runs
+        SELECT workspace_id, search_run_id, 'legacy-investigation', investigation_id, NULL, NULL, adapter_id,
+          adapter_version, policy_version, query_digest, result_set_digest, created_at FROM internet_search_runs;
+      INSERT INTO web_search_artifact_results
+        SELECT workspace_id, search_run_id, result_id, rank, url, url_digest, title, description, result_digest,
+          (SELECT created_at FROM internet_search_runs run WHERE run.workspace_id = result.workspace_id AND run.search_run_id = result.search_run_id)
+        FROM internet_search_results result;
+
+      CREATE TRIGGER web_search_artifact_runs_no_update BEFORE UPDATE ON web_search_artifact_runs BEGIN SELECT RAISE(ABORT, 'web search artifact run is immutable'); END;
+      CREATE TRIGGER web_search_artifact_runs_no_delete BEFORE DELETE ON web_search_artifact_runs BEGIN SELECT RAISE(ABORT, 'web search artifact run is immutable'); END;
+      CREATE TRIGGER web_search_artifact_results_no_update BEFORE UPDATE ON web_search_artifact_results BEGIN SELECT RAISE(ABORT, 'web search artifact result is immutable'); END;
+      CREATE TRIGGER web_search_artifact_results_no_delete BEFORE DELETE ON web_search_artifact_results BEGIN SELECT RAISE(ABORT, 'web search artifact result is immutable'); END;
     `,
   }),
 ]);

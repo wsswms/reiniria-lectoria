@@ -1,14 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableJson } from "../domain/contracts.mjs";
 import { ResearchAuthorizationError, ResearchConflictError } from "./foundation-service.mjs";
+import { WebSearchArtifactService } from "./web-search-artifact-service.mjs";
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 export class ResearchToolGateway {
-  constructor(database, workspaceId, { capabilities, budgets, evidence, adapters, now = () => new Date(), id = randomUUID } = {}) {
+  constructor(database, workspaceId, { capabilities, budgets, evidence, adapters, artifacts, now = () => new Date(), id = randomUUID } = {}) {
     if (!capabilities || !budgets || !evidence || !(adapters instanceof Map)) throw new TypeError("research gateway dependencies are required");
     this.database = database; this.workspaceId = workspaceId; this.capabilities = capabilities; this.budgets = budgets;
-    this.evidence = evidence; this.adapters = adapters; this.now = now; this.id = id;
+    this.evidence = evidence; this.adapters = adapters; this.artifacts = artifacts ?? new WebSearchArtifactService(database, workspaceId, { now });
+    this.now = now; this.id = id;
   }
 
   async search(token, runId, input) {
@@ -19,9 +21,10 @@ export class ResearchToolGateway {
       estimate: { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 0 } });
     if (reservation.entries.length !== 1 || reservation.entries[0].entryType !== "reserved") throw new ResearchConflictError("terminal tool receipt cannot execute twice");
     try {
-      const response = await adapter.search({ query: input.query, count: input.count });
+      const response = await adapter.search({ query: input.query, count: input.count, country: input.country, searchLanguage: input.language });
+      const artifacts = this.artifacts.recordResearch(reservation.queryId, response);
       this.budgets.settle(reservation.queryId, response.usage, { responseDigest: response.responseDigest, adapterVersion: response.adapterVersion });
-      return response;
+      return Object.freeze({ ...response, queryId: reservation.queryId, artifactRunId: artifacts.artifactRunId, results: artifacts.results });
     } catch (error) {
       this.budgets.unknown(reservation.queryId, { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 0 }, { category: error?.category ?? "unknown" });
       throw error;

@@ -123,7 +123,7 @@ test(`schema ${CURRENT_SCHEMA_VERSION} fault points converge to previous or comp
   }
 });
 
-test("a populated M5 single-query investigation and applied proposal keeps byte-identical normalized rows after v19 to v20 migration", async () => {
+test("a populated M5 single-query investigation and applied proposal keeps byte-identical normalized rows after v19 to current migration", async () => {
   const root = await mkdtemp(join(tmpdir(), "lectoria-m5r-1-legacy-"));
   const filename = join(root, "app.sqlite3");
   const legacy = createAtVersion(filename, 19);
@@ -132,12 +132,15 @@ test("a populated M5 single-query investigation and applied proposal keeps byte-
   applyMigrations(legacy.database);
   assert.deepEqual(tableDigests(legacy.database, tables), before);
   assert.equal(legacy.database.prepare("SELECT count(*) AS count FROM research_requests").get().count, 0);
+  assert.deepEqual(legacy.database.prepare("SELECT scope_kind AS scopeKind, adapter_id AS adapterId FROM web_search_artifact_runs").get(),
+    { scopeKind: "legacy-investigation", adapterId: "brave-search" });
+  assert.equal(legacy.database.prepare("SELECT count(*) AS count FROM web_search_artifact_results").get().count, 1);
   assertDatabaseIntegrity(legacy.database);
   legacy.database.close();
   await rm(root, { recursive: true, force: true });
 });
 
-test("schema 20 installs scoped immutable research, evidence, budget and cache foundations", async () => {
+test("current schema installs scoped immutable research, evidence, budget, web artifact and cache foundations", async () => {
   const root = await mkdtemp(join(tmpdir(), "lectoria-m5r-1-schema-"));
   const filename = join(root, "app.sqlite3");
   const workspaceId = randomUUID();
@@ -145,7 +148,8 @@ test("schema 20 installs scoped immutable research, evidence, budget and cache f
   const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
   for (const name of ["research_requests", "research_request_revisions", "research_grants", "research_runs", "research_queries",
     "research_budget_ledger", "provider_content_snapshots", "research_sources", "research_citations", "research_claims",
-    "research_reports", "knowledge_proposal_research_evidence", "research_cache_inventory_entries"]) assert.equal(tables.has(name), true, name);
+    "research_reports", "knowledge_proposal_research_evidence", "web_search_artifact_runs", "web_search_artifact_results",
+    "research_cache_inventory_entries"]) assert.equal(tables.has(name), true, name);
   for (let index = 0; index < 200; index += 1) assert.throws(() => database.prepare(`INSERT INTO research_cache_inventory_entries
     VALUES (?, ?, 'search-result', ?, 'cache/item', 1, 'public', 'included', 1, 'retain', ?)`)
     .run(randomUUID(), randomUUID(), randomUUID(), timestamp), /FOREIGN KEY/);
