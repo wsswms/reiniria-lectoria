@@ -1,10 +1,11 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, states, workCopies, validation, reviews, exports }) {
+  constructor({ imports, reimports, states, workCopies, validation, quality = null, reviews, exports }) {
     this.imports = imports;
     this.reimports = reimports;
     this.states = states;
     this.workCopies = workCopies;
     this.validation = validation;
+    this.quality = quality;
     this.reviews = reviews;
     this.exports = exports;
   }
@@ -42,11 +43,16 @@ export class WorkflowApi {
       case "working-copy:get": return this.workCopies.getBundle(payload.workflowId);
       case "validate": return this.validation.run(payload.workflowId);
       case "validation:get": return this.validation.get(payload.validationRunId);
+      case "quality:run-working": return this.quality.runWorking(payload.workflowId, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:run-candidate": return this.quality.runCandidate(payload.workflowId, payload.segmentId, payload.candidateId, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:get": return this.quality.get(payload.qualityRunId);
+      case "quality:compare": return this.quality.compare(payload.workflowId, payload.segmentId, payload.candidateIds, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:confirm-warning": return this.quality.confirmWarning(payload.workflowId, payload.qualityRunId, payload.findingId, payload.actor);
       case "warning:confirm": return this.reviews.confirmWarning(payload.workflowId, payload.validationRunId, payload.findingId, payload.actor);
-      case "review": return this.reviews.humanReview(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor);
-      case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor);
+      case "review": return this.reviews.humanReview(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
+      case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
       case "review:list": return this.reviews.getEvents(payload.workflowId);
-      case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format);
+      case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format, payload.qualityRunId ?? null);
       default: throw new TypeError("unknown workflow command");
     }
   }

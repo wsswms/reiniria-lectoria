@@ -51,7 +51,7 @@ export function seedWorkingCopies(fixture, workflow, transform = (segment) => se
   const heads = [];
   for (const segment of workflow.segments) {
     const candidate = fixture.workCopies.addCandidate(workflow.workflowId, segment.segmentId, transform(segment), actor);
-    heads.push(fixture.workCopies.selectCandidate(workflow.workflowId, segment.segmentId, candidate.candidateId, null, actor));
+    heads.push(fixture.workCopies.selectCandidate(workflow.workflowId, segment.segmentId, candidate.candidateId, null, { type: "user", id: `${actor.id}-selector` }));
   }
   return heads;
 }

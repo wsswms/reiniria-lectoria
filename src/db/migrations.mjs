@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1601,6 +1601,187 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'attempt evidence binding is immutable'); END;
       CREATE TRIGGER attempt_evidence_bindings_no_delete BEFORE DELETE ON attempt_evidence_bindings
       BEGIN SELECT RAISE(ABORT, 'attempt evidence binding is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 17,
+    name: "deterministic-quality-runs",
+    sql: `
+      CREATE TABLE quality_rule_snapshots (
+        workspace_id TEXT NOT NULL,
+        rule_snapshot_id TEXT NOT NULL CHECK(length(rule_snapshot_id) = 71 AND substr(rule_snapshot_id, 1, 7) = 'sha256:'),
+        registry_version TEXT NOT NULL,
+        rules_digest TEXT NOT NULL CHECK(length(rules_digest) = 71 AND substr(rules_digest, 1, 7) = 'sha256:'),
+        fact_heads_digest TEXT NOT NULL CHECK(length(fact_heads_digest) = 71 AND substr(fact_heads_digest, 1, 7) = 'sha256:'),
+        parser_version TEXT NOT NULL,
+        validator_version TEXT NOT NULL,
+        rules_json TEXT NOT NULL CHECK(json_valid(rules_json) AND json_type(rules_json) = 'array'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, rule_snapshot_id),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE quality_runs (
+        workspace_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL CHECK(length(quality_run_id) = 71 AND substr(quality_run_id, 1, 7) = 'sha256:'),
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT,
+        subject_type TEXT NOT NULL CHECK(subject_type IN ('candidate', 'working-copy')),
+        subject_id TEXT NOT NULL,
+        subject_digest TEXT NOT NULL CHECK(length(subject_digest) = 71 AND substr(subject_digest, 1, 7) = 'sha256:'),
+        rule_snapshot_id TEXT NOT NULL,
+        validation_run_id TEXT,
+        evidence_digest TEXT NOT NULL CHECK(length(evidence_digest) = 71 AND substr(evidence_digest, 1, 7) = 'sha256:'),
+        summary_digest TEXT NOT NULL CHECK(length(summary_digest) = 71 AND substr(summary_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, quality_run_id),
+        UNIQUE (workspace_id, workflow_id, quality_run_id),
+        CHECK((subject_type = 'candidate' AND segment_id IS NOT NULL AND validation_run_id IS NULL) OR
+              (subject_type = 'working-copy' AND segment_id IS NULL AND validation_run_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, rule_snapshot_id)
+          REFERENCES quality_rule_snapshots(workspace_id, rule_snapshot_id),
+        FOREIGN KEY (workspace_id, workflow_id, validation_run_id)
+          REFERENCES validation_runs(workspace_id, workflow_id, validation_run_id)
+      ) STRICT;
+
+      CREATE TABLE quality_run_candidates (
+        workspace_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, quality_run_id),
+        FOREIGN KEY (workspace_id, workflow_id, quality_run_id)
+          REFERENCES quality_runs(workspace_id, workflow_id, quality_run_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates(workspace_id, workflow_id, segment_id, candidate_id)
+      ) STRICT;
+
+      CREATE TABLE quality_run_working_revisions (
+        workspace_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        working_copy_revision_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, quality_run_id, segment_id),
+        FOREIGN KEY (workspace_id, workflow_id, quality_run_id)
+          REFERENCES quality_runs(workspace_id, workflow_id, quality_run_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, working_copy_revision_id)
+          REFERENCES working_copy_revisions(workspace_id, workflow_id, segment_id, working_copy_revision_id)
+      ) STRICT;
+
+      CREATE TABLE quality_findings (
+        workspace_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL,
+        finding_id TEXT NOT NULL CHECK(length(finding_id) = 71 AND substr(finding_id, 1, 7) = 'sha256:'),
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        severity TEXT NOT NULL CHECK(severity IN ('error', 'warning', 'info')),
+        rule_id TEXT NOT NULL,
+        rule_version TEXT NOT NULL,
+        segment_id TEXT,
+        subject_revision_id TEXT NOT NULL,
+        fact_id TEXT,
+        fact_revision_id TEXT,
+        evidence_digest TEXT NOT NULL CHECK(length(evidence_digest) = 71 AND substr(evidence_digest, 1, 7) = 'sha256:'),
+        parameters_json TEXT NOT NULL CHECK(json_valid(parameters_json) AND json_type(parameters_json) = 'object'),
+        PRIMARY KEY (workspace_id, quality_run_id, finding_id),
+        UNIQUE (workspace_id, quality_run_id, ordinal),
+        CHECK((fact_id IS NULL AND fact_revision_id IS NULL) OR (fact_id IS NOT NULL AND fact_revision_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, quality_run_id) REFERENCES quality_runs(workspace_id, quality_run_id),
+        FOREIGN KEY (workspace_id, fact_id, fact_revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TABLE quality_warning_confirmations (
+        workspace_id TEXT NOT NULL,
+        confirmation_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL,
+        finding_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, confirmation_id),
+        UNIQUE (workspace_id, quality_run_id, finding_id),
+        FOREIGN KEY (workspace_id, workflow_id, quality_run_id)
+          REFERENCES quality_runs(workspace_id, workflow_id, quality_run_id),
+        FOREIGN KEY (workspace_id, quality_run_id, finding_id)
+          REFERENCES quality_findings(workspace_id, quality_run_id, finding_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_comparisons (
+        workspace_id TEXT NOT NULL,
+        comparison_id TEXT NOT NULL CHECK(length(comparison_id) = 71 AND substr(comparison_id, 1, 7) = 'sha256:'),
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        rule_snapshot_id TEXT NOT NULL,
+        comparison_digest TEXT NOT NULL CHECK(length(comparison_digest) = 71 AND substr(comparison_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, comparison_id),
+        UNIQUE (workspace_id, workflow_id, segment_id, comparison_id),
+        FOREIGN KEY (workspace_id, rule_snapshot_id)
+          REFERENCES quality_rule_snapshots(workspace_id, rule_snapshot_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_comparison_members (
+        workspace_id TEXT NOT NULL,
+        comparison_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        quality_run_id TEXT NOT NULL,
+        rank INTEGER NOT NULL CHECK(rank >= 1),
+        error_count INTEGER NOT NULL CHECK(error_count >= 0),
+        warning_count INTEGER NOT NULL CHECK(warning_count >= 0),
+        info_count INTEGER NOT NULL CHECK(info_count >= 0),
+        evidence_coverage INTEGER NOT NULL CHECK(evidence_coverage BETWEEN 0 AND 100),
+        PRIMARY KEY (workspace_id, comparison_id, candidate_id),
+        UNIQUE (workspace_id, comparison_id, rank),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, comparison_id)
+          REFERENCES candidate_comparisons(workspace_id, workflow_id, segment_id, comparison_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates(workspace_id, workflow_id, segment_id, candidate_id),
+        FOREIGN KEY (workspace_id, quality_run_id)
+          REFERENCES quality_runs(workspace_id, quality_run_id)
+      ) STRICT;
+
+      CREATE TRIGGER quality_rule_snapshots_no_update BEFORE UPDATE ON quality_rule_snapshots
+      BEGIN SELECT RAISE(ABORT, 'quality rule snapshot is immutable'); END;
+      CREATE TRIGGER quality_rule_snapshots_no_delete BEFORE DELETE ON quality_rule_snapshots
+      BEGIN SELECT RAISE(ABORT, 'quality rule snapshot is immutable'); END;
+      CREATE TRIGGER quality_runs_no_update BEFORE UPDATE ON quality_runs
+      BEGIN SELECT RAISE(ABORT, 'quality run is immutable'); END;
+      CREATE TRIGGER quality_runs_no_delete BEFORE DELETE ON quality_runs
+      BEGIN SELECT RAISE(ABORT, 'quality run is immutable'); END;
+      CREATE TRIGGER quality_findings_no_update BEFORE UPDATE ON quality_findings
+      BEGIN SELECT RAISE(ABORT, 'quality finding is immutable'); END;
+      CREATE TRIGGER quality_findings_no_delete BEFORE DELETE ON quality_findings
+      BEGIN SELECT RAISE(ABORT, 'quality finding is immutable'); END;
+      CREATE TRIGGER quality_run_candidates_no_update BEFORE UPDATE ON quality_run_candidates
+      BEGIN SELECT RAISE(ABORT, 'quality candidate binding is immutable'); END;
+      CREATE TRIGGER quality_run_candidates_no_delete BEFORE DELETE ON quality_run_candidates
+      BEGIN SELECT RAISE(ABORT, 'quality candidate binding is immutable'); END;
+      CREATE TRIGGER quality_run_working_revisions_no_update BEFORE UPDATE ON quality_run_working_revisions
+      BEGIN SELECT RAISE(ABORT, 'quality working binding is immutable'); END;
+      CREATE TRIGGER quality_run_working_revisions_no_delete BEFORE DELETE ON quality_run_working_revisions
+      BEGIN SELECT RAISE(ABORT, 'quality working binding is immutable'); END;
+      CREATE TRIGGER quality_warning_confirmations_no_update BEFORE UPDATE ON quality_warning_confirmations
+      BEGIN SELECT RAISE(ABORT, 'quality warning confirmation is immutable'); END;
+      CREATE TRIGGER quality_warning_confirmations_no_delete BEFORE DELETE ON quality_warning_confirmations
+      BEGIN SELECT RAISE(ABORT, 'quality warning confirmation is immutable'); END;
+      CREATE TRIGGER candidate_comparisons_no_update BEFORE UPDATE ON candidate_comparisons
+      BEGIN SELECT RAISE(ABORT, 'candidate comparison is immutable'); END;
+      CREATE TRIGGER candidate_comparisons_no_delete BEFORE DELETE ON candidate_comparisons
+      BEGIN SELECT RAISE(ABORT, 'candidate comparison is immutable'); END;
+      CREATE TRIGGER candidate_comparison_members_no_update BEFORE UPDATE ON candidate_comparison_members
+      BEGIN SELECT RAISE(ABORT, 'candidate comparison member is immutable'); END;
+      CREATE TRIGGER candidate_comparison_members_no_delete BEFORE DELETE ON candidate_comparison_members
+      BEGIN SELECT RAISE(ABORT, 'candidate comparison member is immutable'); END;
     `,
   }),
 ]);

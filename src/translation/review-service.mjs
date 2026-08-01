@@ -18,12 +18,13 @@ function actor(input) {
 }
 
 export class ReviewService {
-  constructor(database, trustedWorkspaceId, { now = () => new Date(), id = () => randomUUID(), validation } = {}) {
+  constructor(database, trustedWorkspaceId, { now = () => new Date(), id = () => randomUUID(), validation, quality = null } = {}) {
     this.database = database;
     this.workspaceId = trustedWorkspaceId;
     this.now = now;
     this.id = id;
     this.validation = validation ?? new ValidationService(database, trustedWorkspaceId, { now, id });
+    this.quality = quality;
   }
 
   confirmWarning(workflowId, validationRunId, findingId, actorInput) {
@@ -42,12 +43,12 @@ export class ReviewService {
     return this.getEvents(workflowId);
   }
 
-  humanReview(workflowId, validationRunId, expectedWorkflowVersion, actorInput) {
-    return this.#transition(workflowId, validationRunId, expectedWorkflowVersion, "editing", "human-reviewed", actorInput);
+  humanReview(workflowId, validationRunId, expectedWorkflowVersion, actorInput, qualityRunId = null) {
+    return this.#transition(workflowId, validationRunId, expectedWorkflowVersion, "editing", "human-reviewed", actorInput, qualityRunId);
   }
 
-  approve(workflowId, validationRunId, expectedWorkflowVersion, actorInput) {
-    return this.#transition(workflowId, validationRunId, expectedWorkflowVersion, "human-reviewed", "approved-for-export", actorInput);
+  approve(workflowId, validationRunId, expectedWorkflowVersion, actorInput, qualityRunId = null) {
+    return this.#transition(workflowId, validationRunId, expectedWorkflowVersion, "human-reviewed", "approved-for-export", actorInput, qualityRunId);
   }
 
   getEvents(workflowId, _untrustedWorkspaceId = undefined) {
@@ -60,10 +61,15 @@ export class ReviewService {
     `).all(this.workspaceId, workflowId).map((row) => Object.freeze({ ...row, details: JSON.parse(row.detailsJson) })));
   }
 
-  #transition(workflowId, validationRunId, expectedVersion, requiredState, nextState, actorInput) {
+  #transition(workflowId, validationRunId, expectedVersion, requiredState, nextState, actorInput, qualityRunId) {
     const by = actor(actorInput);
     if (by.type !== "user") return this.#reject(workflowId, `${nextState}-rejected`, by, { validationRunId });
     this.#gate(workflowId, validationRunId);
+    if (this.quality) {
+      if (typeof qualityRunId !== "string") throw new ReviewConflictError("current quality run is required");
+      try { this.quality.assertEligible(workflowId, qualityRunId); }
+      catch { throw new ReviewConflictError("quality run does not permit review"); }
+    }
     try {
       return this.database.transaction(() => {
         const changed = this.database.prepare(`
@@ -71,8 +77,8 @@ export class ReviewService {
           WHERE workspace_id = ? AND workflow_id = ? AND state = ? AND version = ?
         `).run(nextState, this.now().toISOString(), this.workspaceId, workflowId, requiredState, expectedVersion).changes;
         if (changed !== 1) throw new ReviewConflictError("workflow review version or state conflict");
-        this.#event(workflowId, validationRunId, nextState, by, {});
-        this.#audit(workflowId, nextState, by, true, { validationRunId, expectedVersion });
+        this.#event(workflowId, validationRunId, nextState, by, qualityRunId ? { qualityRunId } : {});
+        this.#audit(workflowId, nextState, by, true, { validationRunId, qualityRunId, expectedVersion });
         return Object.freeze(this.#workflow(workflowId));
       })();
     } catch (error) {
