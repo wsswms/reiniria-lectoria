@@ -99,7 +99,7 @@ test("inactive revisions disappear only after a complete deterministic rebuild",
   const setup = await indexedWorkspace();
   try {
     setup.facts.setActive(setup.knowledge.factId, 0, false, actor);
-    assert.equal(setup.retriever.search(request())[0].factId, setup.knowledge.factId);
+    assert.throws(() => setup.retriever.search(request()), /stale/);
     await setup.retriever.rebuild();
     assert.deepEqual(setup.retriever.search(request()), []);
     const digest = setup.retriever.manifest().factSetDigest;
@@ -127,8 +127,13 @@ test("every build manifest and swap fault exposes only the last complete old or 
       });
       await assert.rejects(retriever.rebuild(), /injected/);
       const committed = point === "after-swap";
-      assert.equal(retriever.manifest().factCount, committed ? 4 : 3);
-      assert.equal(retriever.search(request({ query: "New atomic index", tags: ["new"] })).length, committed ? 1 : 0);
+      if (committed) {
+        assert.equal(retriever.manifest().factCount, 4);
+        assert.equal(retriever.search(request({ query: "New atomic index", tags: ["new"] })).length, 1);
+      } else {
+        assert.throws(() => retriever.manifest(), /stale/);
+        assert.throws(() => retriever.search(request({ query: "New atomic index", tags: ["new"] })), /stale/);
+      }
     } finally { await setup.fixture.close(); }
   }
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -2010,6 +2010,43 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
       CREATE TRIGGER knowledge_proposal_decisions_no_delete BEFORE DELETE ON knowledge_proposal_decisions
       BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 19,
+    name: "approved-knowledge-proposal-applications",
+    sql: `
+      CREATE UNIQUE INDEX knowledge_proposal_decision_scope
+        ON knowledge_proposal_decisions(workspace_id, decision_id, proposal_id, proposal_revision_id);
+
+      CREATE TABLE knowledge_proposal_applications (
+        workspace_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('create', 'revise')),
+        fact_id TEXT NOT NULL,
+        fact_revision_id TEXT NOT NULL,
+        proposed_source_digest TEXT NOT NULL CHECK(length(proposed_source_digest) = 71 AND substr(proposed_source_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, application_id),
+        UNIQUE (workspace_id, proposal_id),
+        UNIQUE (workspace_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, decision_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_decisions(workspace_id, decision_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, fact_id, fact_revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER knowledge_proposal_applications_no_update BEFORE UPDATE ON knowledge_proposal_applications
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_applications_no_delete BEFORE DELETE ON knowledge_proposal_applications
+      BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
     `,
   }),
 ]);

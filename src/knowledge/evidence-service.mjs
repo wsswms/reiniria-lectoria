@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableJson } from "../domain/contracts.mjs";
 import { knowledgeHitContract } from "./contracts.mjs";
+import { activeFactSetDigest } from "./fts-retriever.mjs";
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 export const EVIDENCE_POLICY_VERSION = "knowledge-evidence-policy-v1";
@@ -148,8 +149,12 @@ export class EvidenceService {
     if (!workflow || workflow.sourceRevisionId !== snapshot.sourceRevisionId || workflow.targetLanguage !== snapshot.targetLanguage
       || ["stale", "rejected", "exported"].includes(workflow.state)) return Object.freeze({ current: false, reason: "workflow" });
     let manifest;
-    try { manifest = this.retriever.manifest(); } catch { return Object.freeze({ current: false, reason: "index" }); }
+    try { manifest = this.retriever.manifest(); } catch {
+      if (activeFactSetDigest(this.database, this.workspaceId) !== snapshot.indexDigest) return Object.freeze({ current: false, reason: "fact" });
+      return Object.freeze({ current: false, reason: "index" });
+    }
     if (manifest.retrieverVersion !== snapshot.retrieverVersion || manifest.factSetDigest !== snapshot.indexDigest) return Object.freeze({ current: false, reason: "index" });
+    if (activeFactSetDigest(this.database, this.workspaceId) !== snapshot.indexDigest) return Object.freeze({ current: false, reason: "fact" });
     if (snapshot.queryPolicyVersion !== this.policyVersion) return Object.freeze({ current: false, reason: "policy" });
     for (const hit of snapshot.hits) {
       const current = this.database.prepare(`

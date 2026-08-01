@@ -105,6 +105,19 @@ function assertWorkspace(database, workspaceId) {
   if (rows.length !== 1 || rows[0].workspaceId !== workspaceId) throw new Error("workspace identity mismatch");
 }
 
+export function activeFactSetDigest(database, workspaceId) {
+  const rows = database.prepare(`
+    SELECT fact.fact_id AS factId, head.revision_id AS revisionId, revision.content_digest AS contentDigest
+    FROM knowledge_facts AS fact
+    JOIN knowledge_fact_heads AS head
+      ON head.workspace_id = fact.workspace_id AND head.fact_id = fact.fact_id AND head.state = 'active'
+    JOIN knowledge_fact_revisions AS revision
+      ON revision.workspace_id = head.workspace_id AND revision.revision_id = head.revision_id
+    WHERE fact.workspace_id = ? ORDER BY fact.fact_id
+  `).all(workspaceId);
+  return sha(Buffer.from(stableJson(rows)));
+}
+
 function createIndex(filename, workspaceId, rows, builtAt, inject) {
   const index = new Database(filename);
   try {
@@ -271,6 +284,8 @@ export class FtsRetriever {
       if (!manifest || manifest.workspaceId !== this.workspaceId || manifest.schemaVersion !== FTS_INDEX_SCHEMA_VERSION || manifest.retrieverVersion !== FTS_RETRIEVER_VERSION) {
         throw new Error("knowledge index identity mismatch");
       }
+      const digest = index.prepare("SELECT fact_set_digest AS factSetDigest FROM index_manifest WHERE singleton = 1").get().factSetDigest;
+      if (digest !== activeFactSetDigest(this.database, this.workspaceId)) throw new Error("knowledge index is stale");
       return index;
     } catch (error) { index.close(); throw error; }
   }

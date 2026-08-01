@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { stableJson } from "../../src/domain/contracts.mjs";
+import { CURRENT_SCHEMA_VERSION } from "../../src/db/migrations.mjs";
 import { InvestigationService } from "../../src/search/investigation-service.mjs";
 import { KnowledgeProposalService } from "../../src/search/knowledge-proposal-service.mjs";
 import { internetWorkspace, proposedTerm, searchAndFetch, secretCanary, user } from "./helpers.mjs";
@@ -9,7 +10,7 @@ import { internetWorkspace, proposedTerm, searchAndFetch, secretCanary, user } f
 test("investigation search fetch and proposal are deterministic immutable traceable and secret-free", async () => {
   const setup = await internetWorkspace();
   try {
-    assert.equal(setup.fixture.database.pragma("user_version", { simple: true }), 18);
+    assert.equal(setup.fixture.database.pragma("user_version", { simple: true }), CURRENT_SCHEMA_VERSION);
     const searches = [];
     for (let repeat = 0; repeat < 20; repeat += 1) searches.push(await setup.investigations.search(setup.investigation.investigationId));
     assert.equal(new Set(searches.map(stableJson)).size, 1);
