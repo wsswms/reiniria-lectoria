@@ -147,4 +147,4 @@ export function rerankRequestContract(input) {
   return Object.freeze({ query: requiredString(input.query, "rerank query", { max: 1_024 }), hits: Object.freeze(input.hits.map(knowledgeHitContract)), topK: input.topK });
 }
 
-export const KNOWLEDGE_CAPABILITIES = Object.freeze({ fts: "planned", embedding: "unavailable", reranker: "unavailable" });
+export const KNOWLEDGE_CAPABILITIES = Object.freeze({ fts: "available", embedding: "unavailable", reranker: "unavailable" });

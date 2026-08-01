@@ -1,0 +1,21 @@
+{
+  "format": "m5-2-retrieval-corpus-v1",
+  "generator": "retrieval-corpus.mjs",
+  "digest": "sha256:e6e7d6cc46e6e60231f2cc0e442010b45aa6a5d266f44df82a00bbd4ad1e8944",
+  "factCount": 300,
+  "queryCount": 126,
+  "languages": {
+    "en": { "facts": 100, "queries": 42 },
+    "ja": { "facts": 100, "queries": 42 },
+    "zh-CN": { "facts": 100, "queries": 42 }
+  },
+  "categories": {
+    "exact": 18,
+    "no-result": 18,
+    "proper": 18,
+    "short": 18,
+    "synonym": 18,
+    "topic": 18,
+    "typo": 18
+  }
+}
