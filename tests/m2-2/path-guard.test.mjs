@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { InvalidWorkspacePathError } from "../../src/workspace/errors.mjs";
-import { resolveWorkspaceFile, validateRelativeWorkspacePath, writeWorkspaceFile } from "../../src/workspace/path-guard.mjs";
+import { ensureWorkspaceDirectory, resolveWorkspaceFile, validateRelativeWorkspacePath, writeWorkspaceFile } from "../../src/workspace/path-guard.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +36,20 @@ test("path guard rejects symlinks and special files and never writes outside roo
     await writeWorkspaceFile(root, "private/objects/good", "ok");
     assert.equal(await readFile(join(root, "private", "objects", "good"), "utf8"), "ok");
     assert.equal(await readFile(join(outside, "sentinel"), "utf8"), "unchanged");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("path guard safely handles concurrent directory creation", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "lectoria-m2-2-directory-race-"));
+  const root = join(parent, "workspace");
+  await mkdir(root);
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 100 }, () => ensureWorkspaceDirectory(root, "private/objects/sha256/27")),
+    );
+    assert.equal(new Set(results).size, 1);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

@@ -66,6 +66,14 @@ export class ObjectStore {
     }
   }
 
+  findByDigest(digest) {
+    const record = this.database.prepare(`
+      SELECT object_id AS objectId, digest, byte_length AS byteLength, relative_path AS relativePath
+      FROM committed_objects WHERE workspace_id = ? AND digest = ?
+    `).get(this.workspaceId, digest);
+    return record ? Object.freeze(record) : undefined;
+  }
+
   async inspect() {
     const records = this.database.prepare("SELECT object_id AS objectId FROM committed_objects WHERE workspace_id = ? ORDER BY object_id").all(this.workspaceId);
     const failures = [];

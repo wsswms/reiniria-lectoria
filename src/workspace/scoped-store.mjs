@@ -5,7 +5,7 @@ const TABLES = Object.freeze({
   objects: "object_records",
   documents: "documents",
   revisions: "source_revisions",
-  segments: "segments",
+  segments: "document_segments",
   tasks: "task_placeholders",
   idempotency: "idempotency_keys",
   cache: "cache_entries",
@@ -50,12 +50,22 @@ export class ScopedWorkspaceStore {
       row = this.#database.prepare(`SELECT source_revision_id AS resourceId, original_digest AS value FROM ${table} WHERE workspace_id = ? AND source_revision_id = ?`)
         .get(this.#workspaceId, resourceId);
     } else if (resourceClass === "segments") {
-      row = this.#database.prepare(`SELECT segment_id AS resourceId, source_text AS value FROM ${table} WHERE workspace_id = ? AND segment_id = ?`)
+      row = this.#database.prepare(`SELECT segment_id AS resourceId, document_id AS value FROM ${table} WHERE workspace_id = ? AND segment_id = ?`)
         .get(this.#workspaceId, resourceId);
     } else {
       row = this.#database.prepare(`SELECT resource_id AS resourceId, value FROM ${table} WHERE workspace_id = ? AND resource_id = ?`)
         .get(this.#workspaceId, resourceId);
     }
+    if (!row) throw new ResourceNotFoundError();
+    return Object.freeze(row);
+  }
+
+  getSegmentVersion(sourceRevisionId, segmentId, _untrustedWorkspaceId = undefined) {
+    const row = this.#database.prepare(`
+      SELECT segment_id AS resourceId, source_text AS value
+      FROM source_segment_versions
+      WHERE workspace_id = ? AND source_revision_id = ? AND segment_id = ?
+    `).get(this.#workspaceId, sourceRevisionId, segmentId);
     if (!row) throw new ResourceNotFoundError();
     return Object.freeze(row);
   }

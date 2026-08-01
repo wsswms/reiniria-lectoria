@@ -17,8 +17,10 @@ function seedStructured(handle, ids) {
     .run(handle.record.workspaceId, ids.documents, "Fixture", new Date(0).toISOString());
   handle.database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)")
     .run(handle.record.workspaceId, ids.revisions, ids.documents, sha("o"), sha("n"), new Date(0).toISOString());
-  handle.database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(handle.record.workspaceId, ids.segments, ids.revisions, "paragraph", "/0", "fixture", sha("s"), 0, 1, "[]");
+  handle.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)")
+    .run(handle.record.workspaceId, ids.documents, ids.segments, new Date(0).toISOString());
+  handle.database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(handle.record.workspaceId, ids.documents, ids.revisions, ids.segments, "paragraph", "/0", "fixture", sha("s"), 0, 1, "[]", "initial");
 }
 
 test("twenty complete workspace lifecycle rounds preserve identity", async () => {
@@ -80,12 +82,12 @@ test("nine resource classes reject 900 cross-workspace attacks uniformly", async
 
     let databaseRejected = 0;
     const foreignWorkspace = handles[1].record.workspaceId;
-    for (const table of ["object_records", "documents", "source_revisions", "segments", "task_placeholders", "idempotency_keys", "cache_entries", "derived_indexes", "audit_events"]) {
+    for (const table of ["object_records", "documents", "source_revisions", "document_segments", "task_placeholders", "idempotency_keys", "cache_entries", "derived_indexes", "audit_events"]) {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         try {
           if (table === "documents") handles[0].database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), "x", new Date(0).toISOString());
           else if (table === "source_revisions") handles[0].database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), sha("x"), sha("y"), new Date(0).toISOString());
-          else if (table === "segments") handles[0].database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), "p", "/0", "x", sha("x"), 0, 1, "[]");
+          else if (table === "document_segments") handles[0].database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)").run(foreignWorkspace, randomUUID(), randomUUID(), new Date(0).toISOString());
           else handles[0].database.prepare(`INSERT INTO ${table}(workspace_id, resource_id, value) VALUES (?, ?, ?)`)
             .run(foreignWorkspace, randomUUID(), "x");
           assert.fail("cross-workspace database write unexpectedly succeeded");

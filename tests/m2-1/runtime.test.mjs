@@ -18,8 +18,10 @@ function insertFixture(database, ids) {
     .run(ids.workspace, ids.document, "Fixture", new Date(0).toISOString());
   database.prepare("INSERT INTO source_revisions VALUES (?, ?, ?, ?, ?, ?)")
     .run(ids.workspace, ids.revision, ids.document, sha("original"), sha("normalized"), new Date(0).toISOString());
-  database.prepare("INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(ids.workspace, ids.segment, ids.revision, "paragraph", "/0", "fixture", sha("fixture"), 0, 1, "[]");
+  database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)")
+    .run(ids.workspace, ids.document, ids.segment, new Date(0).toISOString());
+  database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(ids.workspace, ids.document, ids.revision, ids.segment, "paragraph", "/0", "fixture", sha("fixture"), 0, 1, "[]", "initial");
 }
 
 test("twenty clean linux database lifecycles migrate, transact, roll back and reopen", async () => {
@@ -44,7 +46,7 @@ test("twenty clean linux database lifecycles migrate, transact, roll back and re
       database.close();
 
       database = openWorkspaceDatabase(filename, { workspaceId: ids.workspace });
-      assert.equal(database.prepare("SELECT count(*) AS total FROM segments").get().total, 1);
+      assert.equal(database.prepare("SELECT count(*) AS total FROM source_segment_versions").get().total, 1);
       assertDatabaseIntegrity(database);
       database.close();
       assert.throws(() => openWorkspaceDatabase(filename, { workspaceId: randomUUID() }), /identity mismatch/);

@@ -54,7 +54,7 @@ test("migration fault points produce only retryable old or complete new schemas"
       assert.equal(database.prepare("SELECT count(*) AS total FROM sqlite_master WHERE type='table' AND name='workspace_summary'").get().total, version === 5 ? 1 : 0);
     } finally { database.close(); }
     const reopened = openWorkspaceDatabase(filename, { workspaceId });
-    assert.equal(reopened.pragma("user_version", { simple: true }), 5);
+    assert.equal(reopened.pragma("user_version", { simple: true }), CURRENT_SCHEMA_VERSION);
     assertDatabaseIntegrity(reopened);
     reopened.close();
     await rm(root, { recursive: true, force: true });

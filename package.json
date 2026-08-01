@@ -12,13 +12,26 @@
     "test:m2.3": "node --test tests/m2-3/*.test.mjs",
     "test:m2.4": "node --test tests/m2-4/*.test.mjs",
     "test:m2.5": "node --test tests/m2-5/*.test.mjs",
-    "test": "npm run test:m2.1 && npm run test:m2.2 && npm run test:m2.3 && npm run test:m2.4 && npm run test:m2.5",
+    "test:m3.1": "node --test tests/m3-1/*.test.mjs",
+    "test:m3.2": "node --test tests/m3-2/*.test.mjs",
+    "test:m3.3": "node --test tests/m3-3/*.test.mjs",
+    "test:m3.4": "node --test tests/m3-4/*.test.mjs",
+    "test:m3.5": "node --test tests/m3-5/*.test.mjs",
+    "test": "npm run test:m2.1 && npm run test:m2.2 && npm run test:m2.3 && npm run test:m2.4 && npm run test:m2.5 && npm run test:m3.1 && npm run test:m3.2 && npm run test:m3.3 && npm run test:m3.4 && npm run test:m3.5",
     "compare:sqlite": "node scripts/compare-sqlite-options.mjs",
     "measure:m2.1": "node scripts/measure-m2-1.mjs",
     "measure:m2.2": "node scripts/measure-m2-2.mjs",
     "measure:m2.3": "node scripts/measure-m2-3.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "13.0.2"
+    "better-sqlite3": "13.0.2",
+    "rehype-parse": "9.0.1",
+    "rehype-sanitize": "6.0.0",
+    "rehype-stringify": "10.0.1",
+    "remark-frontmatter": "5.0.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-stringify": "11.0.0",
+    "unified": "11.0.5"
   }
 }
