@@ -73,5 +73,5 @@
 - M4.5 已实现 `google-gemini`、`openai`、`deepseek` 三个固定域名 Adapter、严格响应/用量归一化、预算、文件描述符凭据注入和 Broker→低权限 Pi Runner→控制面执行链；真实验收选择 DeepSeek V4 Flash，其余 Provider 仅完成离线契约验证。
 - 用户已接受并重基线 M5 实施计划；M5.1～M5.3 已完成，M5 与 M5.4 进行中，公开实现分支为 `feat-m5-knowledge-quality`。M5.5 将实现 Brave Web Search API Adapter、独立 Search/Fetch 网络代理、临时互联网证据和仅用户可批准的知识提案；新增 M5.6 承接批准后事实修订、索引/stale 迭代、恢复和父阶段审计。
 - 后续阶段的新依赖仍须按对应计划锁定、审查并更新 SBOM；不得提前安装依赖或加入占位实现。
-- M4 真实验证授权已随阶段完成而结束；M5 授权包含受控 Brave Search/Fetch 的离线实现与测试，但不自动包含真实 Brave Key、真实 Brave/公网 Fetch 调用、真实翻译 Provider/API、Embedding/Rerank 或真实用户文档。真实 Brave 演练前须单独确认查询/页面范围、次数、费用、凭据注入和证据保留；用户应轮换原图片中的 DeepSeek Key。
+- M4 真实验证授权已随阶段完成而结束；用户已提供仓库外 `0600` Brave Key 文件，并授权 M5 期间仅以公开合成查询执行多次真实 Brave Search：每个测试入口最多 20 次、M5 累计最多 100 次、估算费用硬上限 1 美元，不保存完整原始响应或 Key。该授权不包含真实公网 Fetch、真实翻译 Provider/API、Embedding/Rerank 或真实用户文档；M5 完成后提醒用户轮换并删除本地 Brave Key 文件，用户仍应轮换原图片中的 DeepSeek Key。
 - M8 的 Embedding/Rerank 工作是可选、证据驱动且需单独授权的实验，不得因接口已经预留而提前实现。
