@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createCredentialResolver, createProviderBroker } from "./broker-contract.mjs";
-import { DeterministicFakeProvider, FaultInjectingFakeProvider } from "./fake-provider.mjs";
+import { createProviderRegistry } from "./provider-registry.mjs";
 
 async function readStream(stream, maximum) {
   const chunks = [];
@@ -17,10 +17,7 @@ try {
   const envelope = JSON.parse(await readStream(process.stdin, 4 * 1024 * 1024));
   const resolver = createCredentialResolver(async () => readStream(createReadStream(null, { fd: 3 }), 16 * 1024));
   const broker = createProviderBroker({
-    adapters: new Map([
-      ["fake-primary", new DeterministicFakeProvider({ id: "fake-primary" })],
-      ["fake-fault", new FaultInjectingFakeProvider({ id: "fake-fault", mode: envelope.faultMode ?? "transport" })],
-    ]),
+    adapters: createProviderRegistry({ faultMode: envelope.faultMode ?? "transport" }),
     credentialResolver: resolver,
   });
   const response = await broker.invoke({ request: envelope.request, credentialRef: envelope.credentialRef });

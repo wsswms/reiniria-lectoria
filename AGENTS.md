@@ -70,6 +70,7 @@
 - M3 完成审计已补齐统一应用/CLI 全流程、编辑后导出的结构/目标文本/保护项保真、Validator 结构守卫和路径负例；固定隔离容器全量回归 94/94 通过。
 - 用户已接受 M4 实施计划及五项推荐方案并授权实施；M4.1～M4.4 已完成，M4.5 的 pricing、预算、离线和 fake Provider 恢复预演已完成，公开实现位于 Draft PR #6；真实 Provider 最小演练及 M4 父阶段完成审计仍等待独立确认。
 - M4 Runner 最终运行层固定为 distroless Node.js 22 Debian 13 digest `sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50`；完整 Runner 镜像的 Docker Scout 严重/高危扫描为 0/0。依赖构建层和统一测试镜像仍固定既有 Node.js 22.19 基线。
+- M4.5 已准备 `google-gemini` 候选真实 Adapter 和控制面执行链，但仅通过注入式离线响应验证；这不构成 Provider/模型最终选择或真实调用授权。真实 Key、网络调用、pricing snapshot 与 12 份公开语料发送仍须独立确认。
 - 后续阶段的新依赖仍须按对应计划锁定、审查并更新 SBOM；不得提前安装依赖或加入占位实现。
 - 当前授权不包含真实 Provider/API、真实凭据或真实用户文档；M4.1～M4.4 仅使用 fake Provider，M4.5 真实演练仍需独立确认。
 - M8 的 Embedding/Rerank 工作是可选、证据驱动且需单独授权的实验，不得因接口已经预留而提前实现。

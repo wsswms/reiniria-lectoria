@@ -80,6 +80,17 @@ export class TranslationTaskOrchestrator {
         WHERE a.workspace_id = ? AND t.state IN ('queued', 'running')
           AND w.state NOT IN ('stale', 'rejected', 'exported')
           AND (a.state = 'queued' OR (a.state = 'retry-wait' AND r.next_retry_at <= ?))
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM task_budget_assignments assignment
+              WHERE assignment.workspace_id = a.workspace_id AND assignment.task_id = a.task_id
+            )
+            OR EXISTS (
+              SELECT 1 FROM budget_reservations reservation
+              WHERE reservation.workspace_id = a.workspace_id AND reservation.attempt_id = a.attempt_id
+                AND reservation.state = 'reserved'
+            )
+          )
         ORDER BY a.created_at, a.attempt_id LIMIT 1
       `).get(this.workspaceId, timestamp);
       if (!candidate) return null;
