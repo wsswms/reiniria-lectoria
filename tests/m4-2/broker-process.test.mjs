@@ -8,6 +8,7 @@ import { invokeBrokerProcess, BrokerProcessError } from "../../src/provider/brok
 import { invokeBrokerWithCredentialFile, openCredentialFile } from "../../src/provider/credential-file.mjs";
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const hangingBroker = new URL("./broker-hang-fixture.mjs", import.meta.url);
 function request(providerId = "fake-primary") {
   return {
     workspaceId: randomUUID(), taskId: randomUUID(), attemptId: randomUUID(), workflowId: randomUUID(), sourceRevisionId: randomUUID(),
@@ -29,6 +30,7 @@ test("Broker fixed allowlist and fault normalization fail closed without secret 
   const canary = `M4-BROKER-SECRET-${randomUUID()}`;
   await assert.rejects(invokeBrokerProcess({ request: request("not-allowed"), credentialRef: "test:no", credential: canary }), (error) => error instanceof BrokerProcessError && error.category === "policy" && !error.message.includes(canary));
   await assert.rejects(invokeBrokerProcess({ request: request("fake-fault"), credentialRef: "test:fault", credential: canary, faultMode: "auth" }), (error) => error instanceof BrokerProcessError && error.category === "auth" && !error.message.includes(canary));
+  await assert.rejects(invokeBrokerProcess({ request: request("fake-fault"), credentialRef: "test:fault", credential: canary, faultMode: "rate-limit" }), (error) => error instanceof BrokerProcessError && error.category === "rate-limit" && error.retryable === true && !error.message.includes(canary));
 });
 
 test("Broker receives a credential through a secure file descriptor without loading it into argv or environment", async () => {
@@ -62,4 +64,11 @@ test("credential files reject relative paths, symlinks, broad permissions and em
     await chmod(path, 0o600);
     await assert.rejects(openCredentialFile(path), /invalid/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("killing an unresponsive Broker after request handoff is a non-retryable unknown outcome", async () => {
+  await assert.rejects(invokeBrokerProcess({
+    request: request(), credentialRef: "test:fake-primary", credential: "fixture",
+  }, { entry: hangingBroker, timeoutMs: 25 }), (error) => error instanceof BrokerProcessError
+    && error.category === "unknown-outcome" && error.retryable === false);
 });

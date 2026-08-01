@@ -29,6 +29,7 @@ try {
       category: typeof error?.category === "string" ? error.category : "provider",
       message: "provider broker invocation failed",
       retryable: error?.retryable === true,
+      ...(error?.providerCode === undefined ? {} : { providerCode: String(error.providerCode) }),
     },
   })}\n`);
   process.exitCode = 1;

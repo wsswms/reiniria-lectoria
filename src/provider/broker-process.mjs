@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
 export class BrokerProcessError extends Error {
-  constructor(category) {
+  constructor(category, retryable = false, providerCode) {
     super("provider broker invocation failed");
     this.name = "BrokerProcessError";
     this.category = category;
+    this.retryable = retryable === true;
+    if (providerCode !== undefined) this.providerCode = String(providerCode);
   }
 }
 
@@ -29,26 +31,30 @@ export function invokeBrokerProcess({ request, credentialRef, credential, creden
     let bytes = 0;
     let forcedCategory;
     const timer = setTimeout(() => {
-      forcedCategory = "timeout";
+      forcedCategory = "unknown-outcome";
       child.kill("SIGKILL");
     }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       bytes += chunk.length;
       if (bytes > outputBytes) {
-        forcedCategory = "output-limit";
+        forcedCategory = "malformed-response";
         child.kill("SIGKILL");
       } else chunks.push(chunk);
     });
-    child.once("error", () => reject(new BrokerProcessError("spawn")));
+    child.once("error", () => reject(new BrokerProcessError("provider")));
     child.once("close", () => {
       clearTimeout(timer);
       if (forcedCategory) return reject(new BrokerProcessError(forcedCategory));
       try {
         const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (!result.ok) return reject(new BrokerProcessError(result.error?.category ?? "provider"));
+        if (!result.ok) return reject(new BrokerProcessError(
+          result.error?.category ?? "provider",
+          result.error?.retryable === true,
+          result.error?.providerCode,
+        ));
         resolve(result.response);
       } catch (error) {
-        reject(error instanceof BrokerProcessError ? error : new BrokerProcessError("malformed-output"));
+        reject(error instanceof BrokerProcessError ? error : new BrokerProcessError("malformed-response"));
       }
     });
     child.stdin.on("error", () => {});
