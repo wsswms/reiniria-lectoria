@@ -1,0 +1,96 @@
+{
+  "stage": "M4.1",
+  "node": "v22.19.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "packageLockSha256": "31fa84f6e1647282124f81f677b66c24211ed010055e368c7c8812d72471e698",
+  "installedProductionPackages": 195,
+  "licenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT"
+  ],
+  "installScripts": [
+    {
+      "name": "@google/genai",
+      "version": "1.52.0",
+      "scripts": {
+        "preinstall": "echo 'preinstall: no-op'"
+      }
+    },
+    {
+      "name": "protobufjs",
+      "version": "7.6.5",
+      "scripts": {
+        "postinstall": "node scripts/postinstall"
+      }
+    }
+  ],
+  "selectedPiRuntime": {
+    "agentCore": {
+      "version": "0.83.0",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.19.0"
+      },
+      "exports": {
+        ".": {
+          "types": "./dist/index.d.ts",
+          "import": "./dist/index.js"
+        },
+        "./node": {
+          "types": "./dist/node.d.ts",
+          "import": "./dist/node.js"
+        },
+        "./package.json": "./package.json"
+      }
+    },
+    "ai": {
+      "version": "0.83.0",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.19.0"
+      },
+      "exports": {
+        ".": {
+          "types": "./dist/index.d.ts",
+          "import": "./dist/index.js"
+        },
+        "./compat": {
+          "types": "./dist/compat.d.ts",
+          "import": "./dist/compat.js"
+        },
+        "./providers/*": {
+          "types": "./dist/providers/*.d.ts",
+          "import": "./dist/providers/*.js"
+        },
+        "./api/*": {
+          "types": "./dist/api/*.d.ts",
+          "import": "./dist/api/*.js"
+        },
+        "./oauth": {
+          "types": "./dist/oauth.d.ts",
+          "import": "./dist/oauth.js"
+        },
+        "./bedrock-provider": {
+          "types": "./dist/bedrock-provider.d.ts",
+          "import": "./dist/bedrock-provider.js"
+        },
+        "./bun-oauth": {
+          "types": "./dist/bun-oauth.d.ts",
+          "import": "./dist/bun-oauth.js"
+        }
+      }
+    },
+    "requiredCoreArtifactsPresent": true
+  },
+  "excludedDependency": {
+    "name": "@earendil-works/pi-coding-agent",
+    "versionReviewed": "0.83.0",
+    "reason": "published shrinkwrap retains brace-expansion 5.0.7 affected by GHSA-mh99-v99m-4gvg; the narrower agent-core API satisfies the Runner boundary"
+  },
+  "installation": "npm ci --ignore-scripts; better-sqlite3 rebuilt explicitly from source"
+}
