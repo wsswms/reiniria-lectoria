@@ -17,11 +17,20 @@ export async function runRunnerProcess(task, {
   inputBytes = task?.limits?.inputBytes,
   outputBytes = task?.limits?.outputBytes,
   killGraceMs = 100,
+  uid,
+  gid,
 } = {}) {
   const encoded = JSON.stringify(task);
   if (!Number.isSafeInteger(inputBytes) || Buffer.byteLength(encoded) > inputBytes) throw new RunnerProcessError("input-limit");
   if (!Number.isSafeInteger(outputBytes) || outputBytes <= 0) throw new RunnerProcessError("output-limit");
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new RunnerProcessError("timeout");
+  const hasUid = uid !== undefined;
+  const hasGid = gid !== undefined;
+  if (hasUid !== hasGid
+    || (hasUid && (!Number.isSafeInteger(uid) || uid <= 0 || uid > 2_147_483_647
+      || !Number.isSafeInteger(gid) || gid <= 0 || gid > 2_147_483_647))) {
+    throw new TypeError("runner uid and gid must be positive safe integers supplied together");
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [entry instanceof URL ? entry.pathname : entry, ...args], {
@@ -29,6 +38,7 @@ export async function runRunnerProcess(task, {
       env: Object.freeze({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", NODE_ENV: "production" }),
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
+      ...(hasUid ? { uid, gid } : {}),
     });
     const stdout = [];
     let stdoutBytes = 0;

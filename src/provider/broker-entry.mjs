@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { fstatSync, readSync } from "node:fs";
 import { createCredentialResolver, createProviderBroker } from "./broker-contract.mjs";
 import { createProviderRegistry } from "./provider-registry.mjs";
 
@@ -13,9 +13,22 @@ async function readStream(stream, maximum) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+function readDescriptorAtStart(fd, maximum) {
+  const buffer = Buffer.alloc(maximum + 1);
+  const positional = fstatSync(fd).isFile();
+  let size = 0;
+  while (size < buffer.length) {
+    const bytes = readSync(fd, buffer, size, buffer.length - size, positional ? size : null);
+    if (bytes === 0) break;
+    size += bytes;
+  }
+  if (size > maximum) throw new Error("broker input limit exceeded");
+  return buffer.subarray(0, size).toString("utf8");
+}
+
 try {
   const envelope = JSON.parse(await readStream(process.stdin, 4 * 1024 * 1024));
-  const resolver = createCredentialResolver(async () => (await readStream(createReadStream(null, { fd: 3 }), 16 * 1024)).trim());
+  const resolver = createCredentialResolver(async () => readDescriptorAtStart(3, 16 * 1024).trim());
   const broker = createProviderBroker({
     adapters: createProviderRegistry({ faultMode: envelope.faultMode ?? "transport" }),
     credentialResolver: resolver,

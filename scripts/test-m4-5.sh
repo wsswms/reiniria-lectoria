@@ -11,6 +11,8 @@ IMAGE=reiniria-lectoria-m4:local
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=768m \
   --cap-drop ALL \
+  --cap-add SETUID \
+  --cap-add SETGID \
   --security-opt no-new-privileges:true \
   --pids-limit 128 \
   --memory 1024m \

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -47,6 +47,26 @@ test("Broker receives a credential through a secure file descriptor without load
     assert.equal(process.argv.join(" ").includes(secret), false);
     assert.equal(JSON.stringify(process.env).includes(secret), false);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Broker can reuse one unlinked credential descriptor without advancing its shared offset", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-broker-unlinked-"));
+  const path = join(root, "provider.key");
+  let handle;
+  try {
+    await writeFile(path, "fixture-only-credential\n", { mode: 0o600 });
+    handle = await openCredentialFile(path);
+    await unlink(path);
+    for (let index = 0; index < 20; index += 1) {
+      const response = await invokeBrokerProcess({
+        request: request(), credentialRef: "file:provider/fake-primary", credentialFd: handle.fd,
+      });
+      assert.equal(response.providerId, "fake-primary");
+    }
+  } finally {
+    await handle?.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("credential files reject relative paths, symlinks, broad permissions and empty values", async () => {

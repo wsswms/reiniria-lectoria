@@ -20,11 +20,13 @@ export function runnerTaskContract(input) {
     toolCalls: positiveInteger(input.limits?.toolCalls, "toolCalls", 32),
     runtimeMs: positiveInteger(input.limits?.runtimeMs, "runtimeMs", 300_000),
   });
+  const brokerResponse = input.brokerResponse === undefined ? undefined : providerResponseContract(input.brokerResponse, request);
   return Object.freeze({
     schemaVersion: RUNNER_TASK_VERSION,
     request,
     capability: Object.freeze({ token: input.capability.token }),
     limits,
+    ...(brokerResponse === undefined ? {} : { brokerResponse }),
   });
 }
 

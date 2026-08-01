@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { runRunnerProcess, RunnerProcessError } from "../../src/runner/process-runner.mjs";
 import { RUNNER_TASK_VERSION, runnerOutputContract } from "../../src/runner/protocol.mjs";
@@ -64,5 +67,26 @@ test("runner process environment is allowlisted and output/input limits fail clo
   }
   for (let index = 0; index < 10; index += 1) {
     await assert.rejects(runRunnerProcess(taskFixture(), { entry: fixture, args: ["large-output"], outputBytes: 1024 }), (error) => error.category === "output-limit");
+  }
+});
+
+test("unprivileged Runner cannot read a root-only secret path or the control-plane credential fd", async () => {
+  if (typeof process.getuid !== "function" || process.getuid() !== 0) return;
+  const root = await mkdtemp(join(tmpdir(), "lectoria-runner-secret-"));
+  const secretPath = join(root, "provider.key");
+  let handle;
+  try {
+    await writeFile(secretPath, "M4-RUNNER-SECRET-CANARY", { mode: 0o600 });
+    handle = await open(secretPath, "r");
+    const result = await runRunnerProcess(taskFixture(), {
+      entry: fixture,
+      args: ["secret-probe", secretPath, String(handle.fd)],
+      uid: 65532,
+      gid: 65532,
+    });
+    assert.deepEqual(result, { uid: 65532, gid: 65532, pathReadable: false, parentFdReadable: false });
+  } finally {
+    await handle?.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

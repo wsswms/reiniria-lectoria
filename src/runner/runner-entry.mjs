@@ -32,7 +32,7 @@ try {
   const raw = await readInput();
   const task = runnerTaskContract(JSON.parse(raw));
   if (Buffer.byteLength(raw) > task.limits.inputBytes) throw new Error("runner input limit exceeded");
-  const response = responseFor(task.request);
+  const response = task.brokerResponse ?? responseFor(task.request);
   const faux = createFauxCore({ provider: "lectoria-broker-fake", models: [{ id: "fixture-model-v1" }] });
   faux.setResponses([fauxAssistantMessage(JSON.stringify(response))]);
   const agent = new Agent({

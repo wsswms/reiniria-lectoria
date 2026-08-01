@@ -3,10 +3,31 @@ import { stableJson } from "../domain/contracts.mjs";
 import { providerErrorContract } from "./contracts.mjs";
 
 const ACTIVE_ATTEMPTS = ["queued", "leased", "running", "retry-wait"];
+const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 function required(value, name) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
   return value;
+}
+
+function attemptContextDigests(input) {
+  const segmentIds = input.segmentIds;
+  if (input.contextDigests !== undefined) {
+    if (!input.contextDigests || typeof input.contextDigests !== "object" || Array.isArray(input.contextDigests)
+      || Object.keys(input.contextDigests).sort().join(",") !== [...segmentIds].sort().join(",")) {
+      throw new TypeError("contextDigests must exactly match segmentIds");
+    }
+    const entries = segmentIds.map((segmentId) => {
+      const value = input.contextDigests[segmentId];
+      if (!SHA256.test(value ?? "")) throw new TypeError("contextDigests values must be sha256 digests");
+      return [segmentId, value];
+    });
+    return new Map(entries);
+  }
+  if (segmentIds.length !== 1 || !SHA256.test(input.contextDigest ?? "")) {
+    throw new TypeError("multi-segment tasks require contextDigests");
+  }
+  return new Map([[segmentIds[0], input.contextDigest]]);
 }
 
 export class TaskConflictError extends Error {
@@ -33,6 +54,7 @@ export class TranslationTaskOrchestrator {
     if (!Array.isArray(input.segmentIds) || input.segmentIds.length === 0 || new Set(input.segmentIds).size !== input.segmentIds.length) {
       throw new TypeError("segmentIds must be a non-empty unique array");
     }
+    const contextDigests = attemptContextDigests(input);
     const workflow = this.database.prepare(`
       SELECT * FROM translation_workflows WHERE workspace_id = ? AND workflow_id = ?
         AND document_id = ? AND source_revision_id = ? AND target_language = ?
@@ -55,7 +77,7 @@ export class TranslationTaskOrchestrator {
         const attemptId = this.id();
         this.database.prepare("INSERT INTO translation_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL)")
           .run(this.workspaceId, attemptId, taskId, input.workflowId, input.documentId, input.sourceRevisionId, input.targetLanguage,
-            segmentId, input.providerId, input.modelId, input.promptVersion, input.contextDigest, input.requestDigest, timestamp);
+            segmentId, input.providerId, input.modelId, input.promptVersion, contextDigests.get(segmentId), input.requestDigest, timestamp);
         this.database.prepare("INSERT INTO attempt_runtime_states VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL, NULL, NULL, 'not-started', NULL)")
           .run(this.workspaceId, attemptId, taskId, segmentId);
         this.#event(taskId, attemptId, "queued", { attemptNumber: 1 }, timestamp);

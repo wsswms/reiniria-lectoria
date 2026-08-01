@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { buildDeepSeekRequest, DEEPSEEK_API_ORIGIN, DEEPSEEK_PROVIDER_ID } from "./deepseek-provider.mjs";
 import { buildGeminiRequest, GEMINI_API_ORIGIN, GEMINI_PROVIDER_ID } from "./gemini-provider.mjs";
 import { buildOpenAIRequest, OPENAI_API_ORIGIN, OPENAI_PROVIDER_ID } from "./openai-provider.mjs";
+import { normalizeDocument } from "../document/parser.mjs";
 
 export const REAL_RUN_CONFIG_VERSION = "lectoria-real-provider-run-v1";
 
@@ -46,9 +47,11 @@ export function realRunConfigContract(input, { allowLive = false } = {}) {
   if (required(input.dataPolicy.reference, "dataPolicy.reference").length > 512 || input.dataPolicy.accepted !== true) {
     throw new TypeError("real run data policy is not accepted");
   }
-  exactKeys(input.limits, ["maxCalls", "hardLimitMicros", "currency"], "limits");
+  exactKeys(input.limits, ["maxCalls", "maxOutputTokens", "hardLimitMicros", "currency"], "limits");
   const maxCalls = integer(input.limits.maxCalls, "limits.maxCalls", 100);
+  const maxOutputTokens = integer(input.limits.maxOutputTokens, "limits.maxOutputTokens", 1_000_000);
   const hardLimitMicros = integer(input.limits.hardLimitMicros, "limits.hardLimitMicros", 10_000_000);
+  if (maxOutputTokens < 1) throw new TypeError("limits.maxOutputTokens is invalid");
   if (maxCalls < 12 || hardLimitMicros < 1 || input.limits.currency !== "USD") throw new TypeError("real run limits are invalid");
   exactKeys(input.pricing, ["version", "source", "inputMicrosPerMillion", "outputMicrosPerMillion", "cachedInputMicrosPerMillion"], "pricing");
   const pricing = Object.freeze({
@@ -67,7 +70,7 @@ export function realRunConfigContract(input, { allowLive = false } = {}) {
     allowedOrigin: input.allowedOrigin,
     corpus: Object.freeze({ ...input.corpus }),
     dataPolicy: Object.freeze({ ...input.dataPolicy }),
-    limits: Object.freeze({ maxCalls, hardLimitMicros, currency: "USD" }),
+    limits: Object.freeze({ maxCalls, maxOutputTokens, hardLimitMicros, currency: "USD" }),
     pricing,
   });
 }
@@ -89,25 +92,37 @@ export function createRealRunDryPlan(configInput, corpus, corpusSourceBytes) {
   if (!Array.isArray(corpus) || corpus.length !== config.corpus.documents || digest(corpusSourceBytes) !== config.corpus.digest) {
     throw new Error("real run corpus digest or document count mismatch");
   }
-  if (corpus.length > config.limits.maxCalls) throw new Error("real run call limit is too low");
   let estimatedCostMicros = 0;
-  const requests = corpus.map((item, index) => {
+  const requests = [];
+  corpus.forEach((item, documentIndex) => {
     if (!item || typeof item.content !== "string" || item.content.length === 0 || typeof item.targetLanguage !== "string") {
       throw new TypeError("real run corpus item is invalid");
     }
-    const inputTokens = estimatedTokens(item.content) + 256;
-    const outputTokens = Math.max(256, estimatedTokens(item.content));
-    estimatedCostMicros += estimatedMicros(config, inputTokens, outputTokens);
-    const request = {
-      workspaceId: uuidFor(index, 1), taskId: uuidFor(index, 2), attemptId: uuidFor(index, 3), workflowId: uuidFor(index, 4), sourceRevisionId: uuidFor(index, 5),
-      targetLanguage: item.targetLanguage, providerId: config.providerId, modelId: config.modelId,
-      promptVersion: "lectoria-translation-v1", contextDigest: contractDigest(`context:${item.id}`),
-      segments: [{ segmentId: uuidFor(index, 6), sourceDigest: contractDigest(item.content), sourceText: item.content, protected: [] }],
-    };
-    const outbound = provider.buildRequest(request);
-    if (new URL(outbound.url).origin !== config.allowedOrigin) throw new Error("real run request escaped the allowlist");
-    return Object.freeze({ itemId: item.id, requestDigest: digest(JSON.stringify(outbound.body)), targetLanguage: item.targetLanguage });
+    const parsed = normalizeDocument(item.format, item.content);
+    parsed.segments.filter((segment) => segment.translatable).forEach((segment) => {
+      const requestIndex = requests.length;
+      const inputTokens = estimatedTokens(segment.sourceText) + 256;
+      estimatedCostMicros += estimatedMicros(config, inputTokens, config.limits.maxOutputTokens);
+      const request = {
+        workspaceId: uuidFor(requestIndex, 1), taskId: uuidFor(requestIndex, 2), attemptId: uuidFor(requestIndex, 3),
+        workflowId: uuidFor(requestIndex, 4), sourceRevisionId: uuidFor(requestIndex, 5),
+        targetLanguage: item.targetLanguage, providerId: config.providerId, modelId: config.modelId,
+        maxOutputTokens: config.limits.maxOutputTokens,
+        promptVersion: "lectoria-translation-v1", contextDigest: contractDigest(`context:${item.id}:${segment.ordinal}`),
+        segments: [{
+          segmentId: uuidFor(requestIndex, 6), sourceDigest: segment.sourceDigest,
+          sourceText: segment.sourceText, protected: segment.protected,
+        }],
+      };
+      const outbound = provider.buildRequest(request);
+      if (new URL(outbound.url).origin !== config.allowedOrigin) throw new Error("real run request escaped the allowlist");
+      requests.push(Object.freeze({
+        itemId: item.id, segmentOrdinal: segment.ordinal,
+        requestDigest: digest(JSON.stringify(outbound.body)), targetLanguage: item.targetLanguage,
+      }));
+    });
   });
+  if (requests.length > config.limits.maxCalls) throw new Error("real run call limit is too low");
   if (estimatedCostMicros > config.limits.hardLimitMicros) throw new Error("real run estimated cost exceeds the hard limit");
   return Object.freeze({
     schemaVersion: REAL_RUN_CONFIG_VERSION,
@@ -116,6 +131,7 @@ export function createRealRunDryPlan(configInput, corpus, corpusSourceBytes) {
     modelId: config.modelId,
     allowedOrigin: config.allowedOrigin,
     corpusDigest: config.corpus.digest,
+    documents: corpus.length,
     calls: requests.length,
     maxCalls: config.limits.maxCalls,
     estimatedCostMicros,

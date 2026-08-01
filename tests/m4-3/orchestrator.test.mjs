@@ -20,6 +20,32 @@ test("one hundred duplicate enqueues create one logical task and one attempt", a
   } finally { await fixture.close(); }
 });
 
+test("multi-segment tasks bind each attempt to its own context digest", async () => {
+  const fixture = await workspace();
+  try {
+    const workflow = seedWorkflow(fixture, { sourceText: "First source" });
+    const secondSegmentId = randomUUID();
+    const timestamp = fixture.clock.now().toISOString();
+    fixture.database.prepare("INSERT INTO document_segments VALUES (?, ?, ?, ?)")
+      .run(fixture.workspaceId, workflow.documentId, secondSegmentId, timestamp);
+    fixture.database.prepare("INSERT INTO source_segment_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(fixture.workspaceId, workflow.documentId, workflow.sourceRevisionId, secondSegmentId, "paragraph", "/1", "Second source", sha("Second source"), 1, 1, "[]", "initial");
+    const contextDigests = {
+      [workflow.segmentId]: sha("context-first"),
+      [secondSegmentId]: sha("context-second"),
+    };
+    const input = enqueueInput(workflow, "multi", {
+      segmentIds: [workflow.segmentId, secondSegmentId],
+      contextDigest: undefined,
+      contextDigests,
+    });
+    const created = orchestrator(fixture).enqueue(input);
+    assert.equal(created.attempts.length, 2);
+    assert.deepEqual(Object.fromEntries(created.attempts.map((attempt) => [attempt.segment_id, attempt.context_digest])), contextDigests);
+    assert.throws(() => orchestrator(fixture).enqueue({ ...input, idempotencyKey: "missing-context", contextDigests: { [workflow.segmentId]: sha("only-one") } }), /contextDigests/);
+  } finally { await fixture.close(); }
+});
+
 test("one hundred lease contenders produce one holder and completion is idempotent", async () => {
   const fixture = await workspace();
   try {
