@@ -1,0 +1,11 @@
+{
+  "format": "lectoria-m4-5-real-provider-corpus-v1",
+  "documents": 12,
+  "formats": {
+    "markdown": 4,
+    "html": 4,
+    "text": 4
+  },
+  "target_languages": ["en", "ja", "zh-CN"],
+  "source_sha256": "cd19e0583f3a8f12f133a333e10ead6b05fa83e5db876e9fd0ad559688bf5f43"
+}

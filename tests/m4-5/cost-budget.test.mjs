@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Worker } from "node:worker_threads";
 import { PricingBudgetService } from "../../src/provider/cost-budget.mjs";
 import { enqueueInput, orchestrator, seedWorkflow, workspace } from "../m4-3/helpers.mjs";
 
@@ -45,13 +46,24 @@ test("soft limit pauses for user confirmation while hard limit and one hundred c
     assert.equal(budgets.reserve(softAttempt, "unit", { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }, { authorizationId }).decision, "reserved");
 
     budgets.addPolicy({ policyVersion: "hard", currency: "USD", softLimitMicros: 10, hardLimitMicros: 10, unknownPriceAction: "block" });
-    const decisions = [];
+    const attemptIds = [];
     for (let index = 0; index < 100; index += 1) {
       const task = orchestrator(fixture).enqueue(enqueueInput(seedWorkflow(fixture), `hard-${index}`)).task;
       budgets.assignTask(task.task_id, "hard");
       const attemptId = fixture.database.prepare("SELECT attempt_id FROM translation_attempts WHERE task_id = ?").get(task.task_id).attempt_id;
-      decisions.push(budgets.reserve(attemptId, "unit", { inputTokens: 0, outputTokens: 1, cachedInputTokens: 0 }).decision);
+      attemptIds.push(attemptId);
     }
+    const groups = Array.from({ length: 10 }, (_, workerIndex) => attemptIds.filter((_, index) => index % 10 === workerIndex));
+    const results = await Promise.all(groups.map((ids) => new Promise((resolve, reject) => {
+      const worker = new Worker(new URL("./reserve-worker.mjs", import.meta.url), { workerData: {
+        filename: `${fixture.root}/app.sqlite3`, workspaceId: fixture.workspaceId, attemptIds: ids,
+      } });
+      worker.once("message", resolve);
+      worker.once("error", reject);
+      worker.once("exit", (code) => { if (code !== 0) reject(new Error(`budget worker exited ${code}`)); });
+    })));
+    const decisions = results.flatMap((result) => result.decisions);
+    assert.deepEqual(results.flatMap((result) => result.errors), []);
     assert.equal(decisions.filter((item) => item === "reserved").length, 8);
     assert.equal(decisions.filter((item) => item === "blocked-hard-limit").length, 92);
     const committed = fixture.database.prepare("SELECT sum(estimated_amount_micros) AS total FROM budget_reservations WHERE state = 'reserved'").get().total;
