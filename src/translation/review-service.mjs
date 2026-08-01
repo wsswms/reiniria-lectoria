@@ -11,7 +11,7 @@ export class ReviewConflictError extends Error {
 }
 
 function actor(input) {
-  if (!input || !["user", "system", "fixture"].includes(input.type) || typeof input.id !== "string" || input.id.length === 0) {
+  if (!input || !["user", "system", "fixture", "provider", "runner"].includes(input.type) || typeof input.id !== "string" || input.id.length === 0) {
     throw new TypeError("invalid actor");
   }
   return input;

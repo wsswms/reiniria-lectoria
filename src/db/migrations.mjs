@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1123,6 +1123,127 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER task_command_results_no_delete
       BEFORE DELETE ON task_command_results
       BEGIN SELECT RAISE(ABORT, 'task command result is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 13,
+    name: "machine-candidate-provenance",
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE translation_candidates_v13 (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('user', 'local-fixture', 'machine')),
+        text TEXT NOT NULL,
+        text_digest TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        UNIQUE (workspace_id, workflow_id, segment_id, candidate_id),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      INSERT INTO translation_candidates_v13 SELECT * FROM translation_candidates;
+
+      CREATE TABLE candidate_creation_events_v13 (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates_v13(workspace_id, workflow_id, segment_id, candidate_id)
+      ) STRICT;
+
+      INSERT INTO candidate_creation_events_v13 SELECT * FROM candidate_creation_events;
+
+      DROP TRIGGER candidate_creation_events_no_update;
+      DROP TRIGGER candidate_creation_events_no_delete;
+      DROP TRIGGER translation_candidates_no_update;
+      DROP TRIGGER translation_candidates_no_delete;
+      DROP TABLE candidate_creation_events;
+      DROP TABLE translation_candidates;
+      ALTER TABLE translation_candidates_v13 RENAME TO translation_candidates;
+      ALTER TABLE candidate_creation_events_v13 RENAME TO candidate_creation_events;
+
+      CREATE UNIQUE INDEX machine_candidate_attempt_identity
+        ON translation_attempts(
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        );
+      CREATE UNIQUE INDEX machine_candidate_attempt_outcome
+        ON attempt_runtime_states(workspace_id, attempt_id, outcome_digest);
+
+      CREATE TABLE machine_candidate_provenance (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        output_digest TEXT NOT NULL CHECK(length(output_digest) = 71 AND substr(output_digest, 1, 7) = 'sha256:'),
+        generation_mode TEXT NOT NULL CHECK(generation_mode IN ('default', 'user-requested')),
+        user_command_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        UNIQUE (workspace_id, attempt_id),
+        CHECK((generation_mode = 'default' AND user_command_id IS NULL) OR
+              (generation_mode = 'user-requested' AND length(user_command_id) > 0)),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates(workspace_id, workflow_id, segment_id, candidate_id),
+        FOREIGN KEY (
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        ) REFERENCES translation_attempts(
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        ),
+        FOREIGN KEY (workspace_id, attempt_id, output_digest)
+          REFERENCES attempt_runtime_states(workspace_id, attempt_id, outcome_digest)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_default_machine_candidate
+        ON machine_candidate_provenance(workspace_id, task_id, segment_id)
+        WHERE generation_mode = 'default';
+
+      CREATE TRIGGER translation_candidates_no_update
+      BEFORE UPDATE ON translation_candidates
+      BEGIN SELECT RAISE(ABORT, 'translation candidate is immutable'); END;
+      CREATE TRIGGER translation_candidates_no_delete
+      BEFORE DELETE ON translation_candidates
+      BEGIN SELECT RAISE(ABORT, 'translation candidate is immutable'); END;
+      CREATE TRIGGER candidate_creation_events_no_update
+      BEFORE UPDATE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+      CREATE TRIGGER candidate_creation_events_no_delete
+      BEFORE DELETE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+      CREATE TRIGGER machine_candidate_provenance_no_update
+      BEFORE UPDATE ON machine_candidate_provenance
+      BEGIN SELECT RAISE(ABORT, 'machine candidate provenance is immutable'); END;
+      CREATE TRIGGER machine_candidate_provenance_no_delete
+      BEFORE DELETE ON machine_candidate_provenance
+      BEGIN SELECT RAISE(ABORT, 'machine candidate provenance is immutable'); END;
     `,
   }),
 ]);

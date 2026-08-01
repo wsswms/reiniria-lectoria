@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { stableJson } from "../domain/contracts.mjs";
+import { validateProtectedText } from "../document/parser.mjs";
 
 export class WorkCopyConflictError extends Error {
   constructor(message = "working copy conflict") {
@@ -68,6 +69,66 @@ export class WorkCopyService {
     return this.getCandidate(candidateId);
   }
 
+  addMachineCandidate(attemptId, text, {
+    outputDigest,
+    generationMode = "default",
+    userCommandId = null,
+  } = {}) {
+    if (typeof text !== "string") throw new TypeError("candidate text is required");
+    if (!/^sha256:[0-9a-f]{64}$/.test(outputDigest ?? "")) throw new TypeError("outputDigest is invalid");
+    if (!["default", "user-requested"].includes(generationMode)) throw new TypeError("generationMode is invalid");
+    if ((generationMode === "default" && userCommandId !== null) ||
+        (generationMode === "user-requested" && (typeof userCommandId !== "string" || userCommandId.length === 0))) {
+      throw new TypeError("userCommandId does not match generationMode");
+    }
+    const attempt = this.database.prepare(`
+      SELECT attempt.*, runtime.provider_call_state, runtime.outcome_digest
+      FROM translation_attempts AS attempt
+      JOIN attempt_runtime_states AS runtime
+        ON runtime.workspace_id = attempt.workspace_id AND runtime.attempt_id = attempt.attempt_id
+      WHERE attempt.workspace_id = ? AND attempt.attempt_id = ?
+        AND attempt.state = 'completed' AND runtime.provider_call_state = 'completed'
+    `).get(this.workspaceId, attemptId);
+    if (!attempt || attempt.outcome_digest !== outputDigest) throw new WorkCopyConflictError("completed attempt outcome mismatch");
+    const workflow = this.#workflow(attempt.workflow_id);
+    if (workflow.sourceRevisionId !== attempt.source_revision_id || workflow.targetLanguage !== attempt.target_language ||
+        ["stale", "rejected", "exported"].includes(workflow.state)) {
+      throw new WorkCopyConflictError("machine candidate workflow is unavailable");
+    }
+    const source = this.database.prepare("SELECT protected_json FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? AND segment_id = ?")
+      .get(this.workspaceId, attempt.source_revision_id, attempt.segment_id);
+    if (!source || text.trim().length === 0) throw new WorkCopyConflictError("machine candidate text is invalid");
+    try { validateProtectedText(text, JSON.parse(source.protected_json)); }
+    catch { throw new WorkCopyConflictError("machine candidate protected content mismatch"); }
+    const candidateId = attemptId;
+    const timestamp = this.now().toISOString();
+    const by = Object.freeze({ type: "system", id: "machine-candidate-intake" });
+    try {
+      this.database.transaction(() => {
+        this.database.prepare("INSERT INTO translation_candidates VALUES (?, ?, ?, ?, ?, ?, ?, 'machine', ?, ?, ?)").run(
+          this.workspaceId, candidateId, attempt.workflow_id, attempt.document_id,
+          attempt.source_revision_id, attempt.target_language, attempt.segment_id,
+          text, digest(text), timestamp,
+        );
+        this.database.prepare("INSERT INTO candidate_creation_events VALUES (?, ?, ?, ?, 'system', ?, ?)")
+          .run(this.workspaceId, candidateId, attempt.workflow_id, attempt.segment_id, by.id, timestamp);
+        this.database.prepare("INSERT INTO machine_candidate_provenance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+          this.workspaceId, candidateId, attempt.task_id, attempt.attempt_id, attempt.workflow_id,
+          attempt.source_revision_id, attempt.target_language, attempt.segment_id,
+          attempt.provider_id, attempt.model_id, attempt.prompt_version, attempt.context_digest,
+          attempt.request_digest, outputDigest, generationMode, userCommandId, timestamp,
+        );
+        this.#audit(attempt.workflow_id, "machine-candidate-created", by, true, {
+          candidateId, attemptId, segmentId: attempt.segment_id, generationMode,
+        });
+      })();
+    } catch (error) {
+      if (error?.code?.startsWith("SQLITE_CONSTRAINT")) throw new WorkCopyConflictError("machine candidate scope or uniqueness conflict");
+      throw error;
+    }
+    return this.getCandidate(candidateId);
+  }
+
   getCandidate(candidateId, _untrustedWorkspaceId = undefined) {
     const row = this.database.prepare(`
       SELECT candidate.candidate_id AS candidateId, candidate.workflow_id AS workflowId,
@@ -80,6 +141,21 @@ export class WorkCopyService {
       WHERE candidate.workspace_id = ? AND candidate.candidate_id = ?
     `).get(this.workspaceId, candidateId);
     if (!row) throw new WorkCopyConflictError("candidate not found");
+    return Object.freeze(row);
+  }
+
+  getMachineProvenance(candidateId, _untrustedWorkspaceId = undefined) {
+    const row = this.database.prepare(`
+      SELECT candidate_id AS candidateId, task_id AS taskId, attempt_id AS attemptId,
+             workflow_id AS workflowId, source_revision_id AS sourceRevisionId,
+             target_language AS targetLanguage, segment_id AS segmentId,
+             provider_id AS providerId, model_id AS modelId, prompt_version AS promptVersion,
+             context_digest AS contextDigest, request_digest AS requestDigest,
+             output_digest AS outputDigest, generation_mode AS generationMode,
+             user_command_id AS userCommandId, created_at AS createdAt
+      FROM machine_candidate_provenance WHERE workspace_id = ? AND candidate_id = ?
+    `).get(this.workspaceId, candidateId);
+    if (!row) throw new WorkCopyConflictError("machine candidate provenance not found");
     return Object.freeze(row);
   }
 
