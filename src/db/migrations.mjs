@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1244,6 +1244,147 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER machine_candidate_provenance_no_delete
       BEFORE DELETE ON machine_candidate_provenance
       BEGIN SELECT RAISE(ABORT, 'machine candidate provenance is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 14,
+    name: "pricing-budget-offline-controls",
+    sql: `
+      CREATE TABLE pricing_snapshots (
+        workspace_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        pricing_version TEXT NOT NULL,
+        currency TEXT NOT NULL CHECK(length(currency) = 3 AND currency = upper(currency)),
+        input_micros_per_million INTEGER NOT NULL CHECK(input_micros_per_million >= 0),
+        output_micros_per_million INTEGER NOT NULL CHECK(output_micros_per_million >= 0),
+        cached_input_micros_per_million INTEGER NOT NULL CHECK(cached_input_micros_per_million >= 0),
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, provider_id, model_id, pricing_version),
+        UNIQUE (workspace_id, provider_id, model_id, pricing_version, currency),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE budget_policy_snapshots (
+        workspace_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        currency TEXT NOT NULL CHECK(length(currency) = 3 AND currency = upper(currency)),
+        soft_limit_micros INTEGER NOT NULL CHECK(soft_limit_micros >= 0),
+        hard_limit_micros INTEGER NOT NULL CHECK(hard_limit_micros >= soft_limit_micros),
+        unknown_price_action TEXT NOT NULL CHECK(unknown_price_action IN ('pause', 'block')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, policy_version),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE task_budget_assignments (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        task_soft_limit_micros INTEGER,
+        task_hard_limit_micros INTEGER,
+        state TEXT NOT NULL CHECK(state IN ('active', 'soft-paused', 'hard-blocked', 'unknown-paused')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        PRIMARY KEY (workspace_id, task_id),
+        CHECK((task_soft_limit_micros IS NULL AND task_hard_limit_micros IS NULL) OR
+              (task_soft_limit_micros >= 0 AND task_hard_limit_micros >= task_soft_limit_micros)),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id),
+        FOREIGN KEY (workspace_id, policy_version) REFERENCES budget_policy_snapshots(workspace_id, policy_version)
+      ) STRICT;
+
+      CREATE TABLE budget_soft_approvals (
+        workspace_id TEXT NOT NULL,
+        approval_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, approval_id),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE budget_reservations (
+        workspace_id TEXT NOT NULL,
+        reservation_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        pricing_version TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        estimated_input_tokens INTEGER NOT NULL CHECK(estimated_input_tokens >= 0),
+        estimated_output_tokens INTEGER NOT NULL CHECK(estimated_output_tokens >= 0),
+        estimated_cached_input_tokens INTEGER NOT NULL CHECK(estimated_cached_input_tokens >= 0 AND estimated_cached_input_tokens <= estimated_input_tokens),
+        estimated_amount_micros INTEGER NOT NULL CHECK(estimated_amount_micros >= 0),
+        actual_amount_micros INTEGER CHECK(actual_amount_micros >= 0),
+        usage_record_id TEXT,
+        approval_id TEXT,
+        state TEXT NOT NULL CHECK(state IN ('reserved', 'consumed', 'released', 'unknown')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        created_at TEXT NOT NULL,
+        finalized_at TEXT,
+        PRIMARY KEY (workspace_id, reservation_id),
+        UNIQUE (workspace_id, attempt_id),
+        UNIQUE (workspace_id, approval_id),
+        CHECK(
+          (state = 'reserved' AND actual_amount_micros IS NULL AND usage_record_id IS NULL AND finalized_at IS NULL) OR
+          (state = 'consumed' AND actual_amount_micros IS NOT NULL AND usage_record_id IS NOT NULL AND finalized_at IS NOT NULL) OR
+          (state = 'unknown' AND actual_amount_micros IS NULL AND finalized_at IS NOT NULL) OR
+          (state = 'released' AND actual_amount_micros IS NULL AND finalized_at IS NOT NULL)
+        ),
+        FOREIGN KEY (workspace_id, attempt_id, task_id, provider_id, model_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id, provider_id, model_id),
+        FOREIGN KEY (workspace_id, provider_id, model_id, pricing_version, currency)
+          REFERENCES pricing_snapshots(workspace_id, provider_id, model_id, pricing_version, currency),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES task_budget_assignments(workspace_id, task_id),
+        FOREIGN KEY (workspace_id, usage_record_id)
+          REFERENCES usage_cost_records(workspace_id, usage_record_id),
+        FOREIGN KEY (workspace_id, approval_id)
+          REFERENCES budget_soft_approvals(workspace_id, approval_id)
+      ) STRICT;
+
+      CREATE TRIGGER pricing_snapshots_no_update BEFORE UPDATE ON pricing_snapshots
+      BEGIN SELECT RAISE(ABORT, 'pricing snapshot is immutable'); END;
+      CREATE TRIGGER pricing_snapshots_no_delete BEFORE DELETE ON pricing_snapshots
+      BEGIN SELECT RAISE(ABORT, 'pricing snapshot is immutable'); END;
+      CREATE TRIGGER budget_policy_snapshots_no_update BEFORE UPDATE ON budget_policy_snapshots
+      BEGIN SELECT RAISE(ABORT, 'budget policy snapshot is immutable'); END;
+      CREATE TRIGGER budget_policy_snapshots_no_delete BEFORE DELETE ON budget_policy_snapshots
+      BEGIN SELECT RAISE(ABORT, 'budget policy snapshot is immutable'); END;
+      CREATE TRIGGER budget_soft_approvals_no_update BEFORE UPDATE ON budget_soft_approvals
+      BEGIN SELECT RAISE(ABORT, 'budget approval is immutable'); END;
+      CREATE TRIGGER budget_soft_approvals_no_delete BEFORE DELETE ON budget_soft_approvals
+      BEGIN SELECT RAISE(ABORT, 'budget approval is immutable'); END;
+      CREATE TRIGGER task_budget_assignments_state_guard
+      BEFORE UPDATE ON task_budget_assignments
+      WHEN NEW.policy_version <> OLD.policy_version
+        OR NEW.task_soft_limit_micros IS NOT OLD.task_soft_limit_micros
+        OR NEW.task_hard_limit_micros IS NOT OLD.task_hard_limit_micros
+        OR NEW.version <> OLD.version + 1 OR (OLD.state || '->' || NEW.state) NOT IN (
+        'active->soft-paused', 'active->hard-blocked', 'active->unknown-paused',
+        'soft-paused->active', 'unknown-paused->active'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid task budget transition'); END;
+      CREATE TRIGGER task_budget_assignments_no_delete BEFORE DELETE ON task_budget_assignments
+      BEGIN SELECT RAISE(ABORT, 'task budget assignment is immutable'); END;
+      CREATE TRIGGER budget_reservations_state_guard
+      BEFORE UPDATE ON budget_reservations
+      WHEN NEW.task_id <> OLD.task_id OR NEW.attempt_id <> OLD.attempt_id
+        OR NEW.provider_id <> OLD.provider_id OR NEW.model_id <> OLD.model_id
+        OR NEW.pricing_version <> OLD.pricing_version OR NEW.currency <> OLD.currency
+        OR NEW.estimated_input_tokens <> OLD.estimated_input_tokens
+        OR NEW.estimated_output_tokens <> OLD.estimated_output_tokens
+        OR NEW.estimated_cached_input_tokens <> OLD.estimated_cached_input_tokens
+        OR NEW.estimated_amount_micros <> OLD.estimated_amount_micros
+        OR NEW.approval_id IS NOT OLD.approval_id OR NEW.created_at <> OLD.created_at
+        OR NEW.version <> OLD.version + 1 OR (OLD.state || '->' || NEW.state) NOT IN (
+        'reserved->consumed', 'reserved->released', 'reserved->unknown', 'unknown->consumed', 'unknown->released'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid budget reservation transition'); END;
+      CREATE TRIGGER budget_reservations_no_delete BEFORE DELETE ON budget_reservations
+      BEGIN SELECT RAISE(ABORT, 'budget reservation is immutable'); END;
     `,
   }),
 ]);
