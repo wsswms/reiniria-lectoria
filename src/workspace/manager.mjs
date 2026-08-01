@@ -10,7 +10,7 @@ import { resolveWorkspaceFile, writeWorkspaceFile } from "./path-guard.mjs";
 import { WorkspaceRegistry } from "./registry.mjs";
 import { ScopedWorkspaceStore } from "./scoped-store.mjs";
 
-const DIRECTORIES = ["state", "private/objects", "private/ledger", "derived", "staging"];
+const DIRECTORIES = ["state", "private/objects", "private/ledger", "derived", "staging", "dictionary", "style", "knowledge"];
 
 export class WorkspaceManager {
   constructor(root, { now = () => new Date(), id = () => randomUUID(), inject = () => {} } = {}) {

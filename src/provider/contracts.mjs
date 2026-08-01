@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CATEGORIES = new Set([
@@ -6,6 +8,9 @@ const ERROR_CATEGORIES = new Set([
 ]);
 const NEVER_RETRY = new Set(["auth", "malformed-response", "policy", "budget", "canceled", "unknown-outcome"]);
 const MAX_OUTPUT_TOKENS = 1_000_000;
+const EVIDENCE_KINDS = new Set(["term", "style", "knowledge"]);
+const EVIDENCE_FIELDS = new Set(["title", "body", "terms", "tags"]);
+const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -68,12 +73,53 @@ function requestSegment(input) {
   });
 }
 
+function evidenceHit(input) {
+  if (!input || typeof input !== "object" || typeof input.snippet !== "string" || Buffer.byteLength(input.snippet) > 4096) {
+    throw new TypeError("evidence hit is invalid");
+  }
+  if (!EVIDENCE_KINDS.has(input.kind) || !EVIDENCE_FIELDS.has(input.matchedField)
+    || input.snippetDigest !== sha(input.snippet)) throw new TypeError("evidence hit identity is invalid");
+  return Object.freeze({
+    rank: positiveInteger(input.rank, "evidence.rank"),
+    factId: id(input.factId, "evidence.factId"),
+    revisionId: id(input.revisionId, "evidence.revisionId"),
+    kind: input.kind,
+    language: language(input.language),
+    matchedField: input.matchedField,
+    snippet: input.snippet,
+    snippetDigest: digest(input.snippetDigest, "evidence.snippetDigest"),
+    contentDigest: digest(input.contentDigest, "evidence.contentDigest"),
+  });
+}
+
+function requestEvidence(input) {
+  if (!input || typeof input !== "object" || input.untrusted !== true || !input.query || Object.keys(input.query).sort().join(",") !== "language,text"
+    || typeof input.query.text !== "string"
+    || input.query.text.length < 1 || input.query.text.length > 512 || !Array.isArray(input.hits) || input.hits.length > 20) {
+    throw new TypeError("evidence is invalid");
+  }
+  const hits = input.hits.map(evidenceHit);
+  if (hits.some((hit, index) => hit.rank !== index + 1)
+    || new Set(hits.map((hit) => `${hit.factId}:${hit.revisionId}`)).size !== hits.length) throw new TypeError("evidence hits must be ordered and unique");
+  return Object.freeze({
+    evidenceId: id(input.evidenceId, "evidenceId"),
+    evidenceDigest: digest(input.evidenceDigest, "evidenceDigest"),
+    segmentId: id(input.segmentId, "evidence.segmentId"),
+    query: Object.freeze({ text: input.query.text, language: language(input.query.language) }),
+    retrieverVersion: requiredString(input.retrieverVersion, "retrieverVersion"),
+    queryPolicyVersion: requiredString(input.queryPolicyVersion, "queryPolicyVersion"),
+    indexDigest: digest(input.indexDigest, "indexDigest"),
+    untrusted: true,
+    hits: Object.freeze(hits),
+  });
+}
+
 export function providerRequestContract(input) {
   if (!input || typeof input !== "object") throw new TypeError("provider request must be an object");
   if (!Array.isArray(input.segments) || input.segments.length === 0) throw new TypeError("segments must be a non-empty array");
   const segments = input.segments.map(requestSegment);
   if (new Set(segments.map((segment) => segment.segmentId)).size !== segments.length) throw new TypeError("duplicate segmentId");
-  return Object.freeze({
+  const output = {
     workspaceId: id(input.workspaceId, "workspaceId"),
     taskId: id(input.taskId, "taskId"),
     attemptId: id(input.attemptId, "attemptId"),
@@ -86,7 +132,19 @@ export function providerRequestContract(input) {
     promptVersion: requiredString(input.promptVersion, "promptVersion"),
     contextDigest: digest(input.contextDigest, "contextDigest"),
     segments: Object.freeze(segments),
-  });
+  };
+  if (input.evidence !== undefined) {
+    if (!Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 8) throw new TypeError("evidence must be a bounded array");
+    const evidence = input.evidence.map(requestEvidence);
+    const segmentIds = new Set(segments.map((segment) => segment.segmentId));
+    if (new Set(evidence.map((item) => item.evidenceId)).size !== evidence.length
+      || evidence.some((item) => !segmentIds.has(item.segmentId))
+      || evidence.some((item) => item.query.language !== output.targetLanguage || item.hits.some((hit) => hit.language !== output.targetLanguage))
+      || evidence.reduce((sum, item) => sum + item.hits.length, 0) > 64
+      || Buffer.byteLength(JSON.stringify(evidence)) > 128 * 1024) throw new TypeError("evidence scope or limits are invalid");
+    output.evidence = Object.freeze(evidence);
+  }
+  return Object.freeze(output);
 }
 
 export function providerUsageContract(input) {

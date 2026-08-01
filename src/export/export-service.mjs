@@ -28,7 +28,7 @@ function filename(format) {
 }
 
 export class ExportService {
-  constructor({ database, root, trustedWorkspaceId, now = () => new Date(), id = () => randomUUID(), inject = () => {}, workCopies, validation }) {
+  constructor({ database, root, trustedWorkspaceId, now = () => new Date(), id = () => randomUUID(), inject = () => {}, workCopies, validation, quality = null }) {
     this.database = database;
     this.root = root;
     this.workspaceId = trustedWorkspaceId;
@@ -37,13 +37,19 @@ export class ExportService {
     this.inject = inject;
     this.workCopies = workCopies ?? new WorkCopyService(database, trustedWorkspaceId, { now, id });
     this.validation = validation ?? new ValidationService(database, trustedWorkspaceId, { now, id, workCopies: this.workCopies });
+    this.quality = quality;
   }
 
-  async export(workflowId, validationRunId, format) {
+  async export(workflowId, validationRunId, format, qualityRunId = null) {
     if (!new Set(["canonical", "markdown", "html", "text"]).has(format)) throw new TypeError("unsupported export format");
     const workflow = this.#workflow(workflowId);
     const run = this.validation.get(validationRunId);
     if (run.workflowId !== workflowId || !run.current) throw new ExportConflictError("validation run is missing or stale");
+    if (this.quality) {
+      if (typeof qualityRunId !== "string") throw new ExportConflictError("current quality run is required");
+      try { this.quality.assertEligible(workflowId, qualityRunId); }
+      catch { throw new ExportConflictError("quality run does not permit export"); }
+    }
     const pendingReimport = this.database.prepare("SELECT 1 FROM reimport_operations WHERE workspace_id = ? AND document_id = ? AND status = 'pending'")
       .get(this.workspaceId, workflow.documentId);
     if (pendingReimport) throw new ExportConflictError("pending reimport must be resolved before export");
@@ -61,6 +67,14 @@ export class ExportService {
         AND validation_run_id = ? AND action = 'approved-for-export'
     `).get(this.workspaceId, workflowId, validationRunId);
     if (!approved) throw new ExportConflictError("approval does not match the validation run");
+    if (this.quality) {
+      const qualityApproved = this.database.prepare(`
+        SELECT 1 FROM review_events WHERE workspace_id = ? AND workflow_id = ?
+          AND validation_run_id = ? AND action = 'approved-for-export'
+          AND json_extract(details_json, '$.qualityRunId') = ?
+      `).get(this.workspaceId, workflowId, validationRunId, qualityRunId);
+      if (!qualityApproved) throw new ExportConflictError("approval does not match the quality run");
+    }
 
     const source = this.database.prepare(`
       SELECT document.title, revision.original_digest AS originalDigest,

@@ -12,7 +12,7 @@ export class WorkCopyConflictError extends Error {
 
 const digest = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
-function actor(input, allowed = ["user", "system", "fixture"]) {
+function actor(input, allowed = ["user", "system", "fixture", "provider", "runner"]) {
   if (!input || !allowed.includes(input.type) || typeof input.id !== "string" || input.id.length === 0) {
     throw new TypeError("invalid actor");
   }
@@ -173,6 +173,10 @@ export class WorkCopyService {
   selectCandidate(workflowId, segmentId, candidateId, expectedHeadVersion, actorInput) {
     const by = actor(actorInput);
     const workflow = this.#workflow(workflowId);
+    if (by.type !== "user") {
+      this.#audit(workflowId, "candidate-selection-rejected", by, false, { segmentId, reason: "actor" });
+      throw new WorkCopyConflictError("only a user can select a candidate");
+    }
     if (["human-reviewed", "approved-for-export", "exported", "stale", "rejected"].includes(workflow.state)) {
       this.#audit(workflowId, "candidate-selection-rejected", by, false, { segmentId, state: workflow.state });
       throw new WorkCopyConflictError("reviewed or terminal workflow cannot select a candidate");

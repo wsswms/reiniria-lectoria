@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "brave-real-search-manifest-v1",
+  "maximumCalls": 3,
+  "queries": [
+    { "id": "iana-example-domains", "query": "IANA example domains documentation", "count": 3, "country": "US", "searchLanguage": "en" },
+    { "id": "sqlite-fts5-docs", "query": "SQLite FTS5 official documentation", "count": 3, "country": "US", "searchLanguage": "en" },
+    { "id": "unicode-terminology", "query": "Unicode terminology translation glossary public", "count": 3, "country": "US", "searchLanguage": "en" }
+  ]
+}

@@ -1,12 +1,19 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, states, workCopies, validation, reviews, exports }) {
+  constructor({ imports, reimports, states, workCopies, validation, quality = null, reviews, exports,
+    investigations = null, proposals = null, iterations = null, retriever = null, integrity = null }) {
     this.imports = imports;
     this.reimports = reimports;
     this.states = states;
     this.workCopies = workCopies;
     this.validation = validation;
+    this.quality = quality;
     this.reviews = reviews;
     this.exports = exports;
+    this.investigations = investigations;
+    this.proposals = proposals;
+    this.iterations = iterations;
+    this.retriever = retriever;
+    this.integrity = integrity;
   }
 
   execute(command, payload) {
@@ -42,11 +49,29 @@ export class WorkflowApi {
       case "working-copy:get": return this.workCopies.getBundle(payload.workflowId);
       case "validate": return this.validation.run(payload.workflowId);
       case "validation:get": return this.validation.get(payload.validationRunId);
+      case "quality:run-working": return this.quality.runWorking(payload.workflowId, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:run-candidate": return this.quality.runCandidate(payload.workflowId, payload.segmentId, payload.candidateId, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:get": return this.quality.get(payload.qualityRunId);
+      case "quality:compare": return this.quality.compare(payload.workflowId, payload.segmentId, payload.candidateIds, { evidenceIds: payload.evidenceIds ?? [] });
+      case "quality:confirm-warning": return this.quality.confirmWarning(payload.workflowId, payload.qualityRunId, payload.findingId, payload.actor);
       case "warning:confirm": return this.reviews.confirmWarning(payload.workflowId, payload.validationRunId, payload.findingId, payload.actor);
-      case "review": return this.reviews.humanReview(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor);
-      case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor);
+      case "review": return this.reviews.humanReview(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
+      case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
       case "review:list": return this.reviews.getEvents(payload.workflowId);
-      case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format);
+      case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format, payload.qualityRunId ?? null);
+      case "internet:create": return this.investigations.create(payload.request, payload.actor);
+      case "internet:get": return this.investigations.get(payload.investigationId);
+      case "internet:search": return this.investigations.search(payload.investigationId);
+      case "internet:fetch": return this.investigations.fetch(payload.investigationId, payload.resultId, payload.handle, payload.actor);
+      case "proposal:create": return this.proposals.create(payload.request, payload.actor);
+      case "proposal:revise": return this.proposals.revise(payload.proposalId, payload.expectedVersion, payload.request, payload.actor);
+      case "proposal:get": return this.proposals.get(payload.proposalId);
+      case "proposal:decide": return this.proposals.decide(payload.proposalId, payload.expectedVersion, payload.decision, payload.actor);
+      case "proposal:apply": return this.iterations.apply(payload.proposalId, payload.actor);
+      case "knowledge:rebuild": return this.retriever.rebuild();
+      case "knowledge:search": return this.retriever.search(payload.request);
+      case "knowledge:diagnose": return this.integrity.diagnose();
+      case "knowledge:repair-derived": return this.integrity.repairDerived();
       default: throw new TypeError("unknown workflow command");
     }
   }

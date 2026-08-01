@@ -219,6 +219,15 @@ export class TranslationTaskOrchestrator {
             current.segment_id, current.provider_id, current.model_id, current.prompt_version, current.context_digest, current.request_digest, timestamp);
         this.database.prepare("INSERT INTO attempt_runtime_states VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, 'not-started', NULL)")
           .run(this.workspaceId, nextId, current.task_id, current.segment_id, nextNumber, retryAt);
+        this.database.prepare(`
+          INSERT INTO attempt_evidence_bindings(
+            workspace_id, attempt_id, task_id, workflow_id, source_revision_id, target_language, segment_id,
+            evidence_id, evidence_digest
+          )
+          SELECT workspace_id, ?, task_id, workflow_id, source_revision_id, target_language, segment_id,
+                 evidence_id, evidence_digest
+          FROM attempt_evidence_bindings WHERE workspace_id = ? AND attempt_id = ?
+        `).run(nextId, this.workspaceId, attemptId);
         this.#event(current.task_id, nextId, "retry-scheduled", { attemptNumber: nextNumber, retryAt }, timestamp);
         this.inject("after-fail-writes");
         return Object.freeze({ attemptId, state: "failed", retryAttemptId: nextId, retryAt });

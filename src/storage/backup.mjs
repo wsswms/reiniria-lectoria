@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { assertDatabaseIntegrity, openWorkspaceDatabase } from "../db/connection.mjs";
 import { CURRENT_SCHEMA_VERSION } from "../db/migrations.mjs";
 import { stableJson } from "../domain/contracts.mjs";
+import { validateRelativeWorkspacePath } from "../workspace/path-guard.mjs";
 import { rebuildDerived } from "./derived-store.mjs";
 
 const hash = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -29,11 +30,39 @@ function manifestDigest(value) {
   return hash(Buffer.from(stableJson(unsigned)));
 }
 
+const PORTABLE_FACT_DIRECTORIES = Object.freeze(["dictionary", "style", "knowledge"]);
+
+function portableFactPath(value) {
+  const parts = validateRelativeWorkspacePath(value);
+  if (!PORTABLE_FACT_DIRECTORIES.includes(parts[0]) || parts.length !== 3 || !parts[2].endsWith(".json")) throw new Error("backup validation failed");
+  return parts.join("/");
+}
+
+async function portableFacts(database, workspaceRoot) {
+  const actual = [];
+  for (const directory of PORTABLE_FACT_DIRECTORIES) {
+    for (const path of await files(join(workspaceRoot, directory))) actual.push(portableFactPath(`${directory}/${path}`));
+  }
+  actual.sort();
+  const rows = database.prepare(`
+    SELECT source_path AS path, content_digest AS digest
+    FROM knowledge_fact_revisions ORDER BY source_path
+  `).all();
+  const expected = rows.map((row) => portableFactPath(row.path));
+  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) throw new Error("backup validation failed");
+  for (const row of rows) {
+    const bytes = await readFile(join(workspaceRoot, ...portableFactPath(row.path).split("/")));
+    if (hash(bytes) !== row.digest) throw new Error("backup validation failed");
+  }
+  return expected;
+}
+
 export async function createWorkspaceBackup({ database, workspaceRoot, destination }) {
   const workspaceId = database.prepare("SELECT workspace_id AS workspaceId FROM workspace_meta").get().workspaceId;
   const temporary = `${destination}.tmp-${randomUUID()}`;
   await rm(temporary, { recursive: true, force: true });
   await mkdir(join(temporary, "objects"), { recursive: true });
+  await mkdir(join(temporary, "facts"), { recursive: true });
   try {
     await database.backup(join(temporary, "database.sqlite3"));
     const objectRows = database.prepare("SELECT object_id AS objectId, digest, byte_length AS byteLength, relative_path AS relativePath FROM committed_objects ORDER BY object_id").all();
@@ -43,11 +72,20 @@ export async function createWorkspaceBackup({ database, workspaceRoot, destinati
       await mkdir(dirname(target), { recursive: true });
       await cp(source, target);
     }
+    const factRows = [];
+    for (const path of await portableFacts(database, workspaceRoot)) {
+      const bytes = await readFile(join(workspaceRoot, ...path.split("/")));
+      const target = join(temporary, "facts", ...path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await cp(join(workspaceRoot, ...path.split("/")), target);
+      factRows.push({ path, digest: hash(bytes), byte_length: bytes.length });
+    }
     const databaseBytes = await readFile(join(temporary, "database.sqlite3"));
     const manifest = {
       format: "reiniria-workspace-backup-v1", workspace_id: workspaceId,
       schema_version: CURRENT_SCHEMA_VERSION, database_digest: hash(databaseBytes),
       objects: objectRows.map(({ objectId, digest, byteLength }) => ({ object_id: objectId, digest, byte_length: byteLength })),
+      portable_facts: factRows,
     };
     manifest.manifest_digest = manifestDigest(manifest);
     await writeFile(join(temporary, "manifest.json"), `${stableJson(manifest)}\n`, { mode: 0o600, flag: "wx" });
@@ -63,7 +101,7 @@ export async function createWorkspaceBackup({ database, workspaceRoot, destinati
 export async function validateWorkspaceBackup(backupRoot) {
   let manifest;
   try { manifest = JSON.parse(await readFile(join(backupRoot, "manifest.json"), "utf8")); } catch { throw new Error("backup validation failed"); }
-  if (manifest.format !== "reiniria-workspace-backup-v1" || manifest.schema_version !== CURRENT_SCHEMA_VERSION || manifest.manifest_digest !== manifestDigest(manifest)) throw new Error("backup validation failed");
+  if (manifest.format !== "reiniria-workspace-backup-v1" || manifest.schema_version !== CURRENT_SCHEMA_VERSION || !Array.isArray(manifest.objects) || !Array.isArray(manifest.portable_facts) || manifest.manifest_digest !== manifestDigest(manifest)) throw new Error("backup validation failed");
   const databaseFile = join(backupRoot, "database.sqlite3");
   if (hash(await readFile(databaseFile)) !== manifest.database_digest) throw new Error("backup validation failed");
   const database = new Database(databaseFile, { readonly: true, fileMustExist: true });
@@ -79,6 +117,14 @@ export async function validateWorkspaceBackup(backupRoot) {
     const bytes = await readFile(join(backupRoot, "objects", object.digest.slice(7))).catch(() => null);
     if (!bytes || bytes.length !== object.byte_length || hash(bytes) !== object.digest) throw new Error("backup validation failed");
   }
+  const expectedFacts = new Set(manifest.portable_facts.map((fact) => `facts/${portableFactPath(fact.path)}`));
+  const actualFacts = (await files(join(backupRoot, "facts"))).map((path) => `facts/${path}`);
+  if (actualFacts.length !== expectedFacts.size || actualFacts.some((path) => !expectedFacts.has(path))) throw new Error("backup validation failed");
+  for (const fact of manifest.portable_facts) {
+    const path = portableFactPath(fact.path);
+    const bytes = await readFile(join(backupRoot, "facts", ...path.split("/"))).catch(() => null);
+    if (!bytes || bytes.length !== fact.byte_length || hash(bytes) !== fact.digest) throw new Error("backup validation failed");
+  }
   return Object.freeze(manifest);
 }
 
@@ -90,13 +136,19 @@ export async function restoreWorkspaceBackup({ backupRoot, manager }) {
   const temporary = join(manager.root, "workspaces", `.restoring-${manifest.workspace_id}-${randomUUID()}`);
   let activated = false;
   await mkdir(join(temporary, "state"), { recursive: true });
-  for (const directory of ["private/objects", "private/ledger", "derived", "staging"]) await mkdir(join(temporary, directory), { recursive: true });
+  for (const directory of ["private/objects", "private/ledger", "derived", "staging", ...PORTABLE_FACT_DIRECTORIES]) await mkdir(join(temporary, directory), { recursive: true });
   try {
     await cp(join(backupRoot, "database.sqlite3"), join(temporary, "state", "app.sqlite3"));
     for (const object of manifest.objects) {
       const target = join(temporary, "private", "objects", "sha256", object.digest.slice(7, 9), object.digest.slice(9));
       await mkdir(dirname(target), { recursive: true });
       await cp(join(backupRoot, "objects", object.digest.slice(7)), target);
+    }
+    for (const fact of manifest.portable_facts) {
+      const path = portableFactPath(fact.path);
+      const target = join(temporary, ...path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await cp(join(backupRoot, "facts", ...path.split("/")), target);
     }
     await writeFile(join(temporary, "workspace.yaml"), `${stableJson({ schemaVersion: manifest.schema_version, workspaceId: manifest.workspace_id })}\n`);
     const database = openWorkspaceDatabase(join(temporary, "state", "app.sqlite3"), { workspaceId: manifest.workspace_id });

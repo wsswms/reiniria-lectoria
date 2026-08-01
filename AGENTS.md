@@ -68,9 +68,10 @@
 
 - M0～M3 已完成；M3.1～M3.5 与第二次父阶段完成审计均已通过，公开 PR #4 已 squash 合并为 `16eb046`。
 - M3 完成审计已补齐统一应用/CLI 全流程、编辑后导出的结构/目标文本/保护项保真、Validator 结构守卫和路径负例；固定隔离容器全量回归 94/94 通过。
-- M4.1～M4.5、ADR-015～ADR-019 与父阶段完成审计已通过；固定 12 文档经 DeepSeek V4 Flash 完成 37 次真实调用/机器候选、用户编辑、Validator、人工审核、批准及普通/Canonical 导出，公开实现位于 Draft PR #6。
+- M4.1～M4.5、ADR-015～ADR-019 与父阶段完成审计已通过；固定 12 文档经 DeepSeek V4 Flash 完成 37 次真实调用/机器候选、用户编辑、Validator、人工审核、批准及普通/Canonical 导出，公开 PR #6 已 squash 合并为 `23679fb`。
 - M4 Runner 最终运行层固定为 distroless Node.js 22 Debian 13 digest `sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50`；完整 Runner 镜像的 Docker Scout 严重/高危扫描为 0/0。依赖构建层和统一测试镜像仍固定既有 Node.js 22.19 基线。
 - M4.5 已实现 `google-gemini`、`openai`、`deepseek` 三个固定域名 Adapter、严格响应/用量归一化、预算、文件描述符凭据注入和 Broker→低权限 Pi Runner→控制面执行链；真实验收选择 DeepSeek V4 Flash，其余 Provider 仅完成离线契约验证。
+- M5.1～M5.6、ADR-020～ADR-025 与父阶段完成审计已通过；Brave Search、独立 Search/Fetch 网络代理、互联网证据、仅用户可批准的知识提案、批准后事实修订、索引/stale 迭代及恢复闭环完成，公开实现位于 PR #7。
 - 后续阶段的新依赖仍须按对应计划锁定、审查并更新 SBOM；不得提前安装依赖或加入占位实现。
-- M4 真实验证授权已随阶段完成而结束；未经新的单独授权，不再调用真实 Provider/API、读取真实凭据或导入真实用户文档。M5 保持未开始，M4 完成不构成 M5 实施授权；用户应轮换原图片中的 DeepSeek Key。
+- M4 真实验证授权已随阶段完成而结束；用户已提供仓库外 `0600` Brave Key 文件，并授权 M5 期间仅以公开合成查询执行多次真实 Brave Search：每个测试入口最多 20 次、M5 累计最多 100 次、估算费用硬上限 1 美元，不保存完整原始响应或 Key。该授权不包含真实公网 Fetch、真实翻译 Provider/API、Embedding/Rerank 或真实用户文档；M5 完成后提醒用户轮换并删除本地 Brave Key 文件，用户仍应轮换原图片中的 DeepSeek Key。
 - M8 的 Embedding/Rerank 工作是可选、证据驱动且需单独授权的实验，不得因接口已经预留而提前实现。

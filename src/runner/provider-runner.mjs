@@ -19,7 +19,7 @@ export async function invokeProviderThroughRunner({
     workspaceId: request.workspaceId,
     taskId: request.taskId,
     attemptId: request.attemptId,
-    scopes: ["segment:read", "candidate:submit"],
+    scopes: ["segment:read", "candidate:submit", ...(request.evidence ? ["term:lookup", "knowledge:search"] : [])],
     expiresAt: Date.now() + 60_000,
   });
   const task = Object.freeze({
