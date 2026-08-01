@@ -92,10 +92,19 @@ function limitsContract(input) {
   return Object.freeze(output);
 }
 
+function providerBudgetContract(input) {
+  const maxima = { maxSearchCalls: RESEARCH_LIMITS.maxima.maxSearchCalls, maxContentUrls: RESEARCH_LIMITS.maxima.maxContentUrls,
+    maxModelTokens: RESEARCH_LIMITS.maxima.maxModelTokens, maxCostMicrosUsd: RESEARCH_LIMITS.maxima.maxCostMicrosUsd };
+  exact(input, Object.keys(maxima), "provider budget");
+  return Object.freeze(Object.fromEntries(Object.entries(maxima).map(([key, maximum]) =>
+    [key, integer(input[key], `provider budget.${key}`, 0, maximum)])));
+}
+
 function providerContract(input) {
-  exact(input, ["capability", "providerId", "fallbackOrder"], "provider");
+  exact(input, ["capability", "providerId", "fallbackOrder", "budget"], "provider");
   if (!CAPABILITIES.has(input.capability)) throw new TypeError("provider capability is invalid");
-  return Object.freeze({ capability: input.capability, providerId: text(input.providerId, "providerId", 127), fallbackOrder: integer(input.fallbackOrder, "fallbackOrder", 0, 16) });
+  return Object.freeze({ capability: input.capability, providerId: text(input.providerId, "providerId", 127),
+    fallbackOrder: integer(input.fallbackOrder, "fallbackOrder", 0, 16), budget: providerBudgetContract(input.budget) });
 }
 
 export function researchGrantContract(input) {
@@ -108,11 +117,14 @@ export function researchGrantContract(input) {
   const approvedAt = iso(input.approvedAt, "approvedAt");
   const expiresAt = iso(input.expiresAt, "expiresAt");
   if (expiresAt <= approvedAt) throw new TypeError("grant must expire after approval");
+  if (!Array.isArray(input.allowedLanguages)) throw new TypeError("allowedLanguages must be an array");
+  const allowedLanguages = input.allowedLanguages.map((item) => language(item, "allowedLanguage")).sort();
+  if (new Set(allowedLanguages).size !== allowedLanguages.length) throw new TypeError("allowedLanguages must not contain duplicates");
   return Object.freeze({ schemaVersion: RESEARCH_CONTRACT_VERSION, grantId: opaqueId(input.grantId, "grantId"),
     requestId: opaqueId(input.requestId, "requestId"), requestRevisionId: opaqueId(input.requestRevisionId, "requestRevisionId"),
     providers: Object.freeze(providers), limits: limitsContract(input.limits),
     allowedDomains: uniqueStrings(input.allowedDomains, "allowedDomains", { max: 128, itemMax: 253 }),
-    allowedLanguages: Object.freeze(input.allowedLanguages.map((item) => language(item, "allowedLanguage")).sort()),
+    allowedLanguages: Object.freeze(allowedLanguages),
     approvedBy: actor(input.approvedBy, "approvedBy", ["user"]), approvedAt, expiresAt });
 }
 
@@ -132,6 +144,7 @@ export function researchQueryContract(input) {
   exact(input, ["schemaVersion", "queryId", "runId", "round", "capability", "providerId", "query", "language", "country", "requestDigest", "idempotencyKey"], "research query");
   version(input, "research query");
   if (!CAPABILITIES.has(input.capability)) throw new TypeError("query capability is invalid");
+  if (!/^[A-Za-z]{2}$/.test(input.country)) throw new TypeError("country must be a two-letter code");
   return Object.freeze({ schemaVersion: RESEARCH_CONTRACT_VERSION, queryId: opaqueId(input.queryId, "queryId"), runId: opaqueId(input.runId, "runId"),
     round: integer(input.round, "round", 1, RESEARCH_LIMITS.maxima.maxRounds), capability: input.capability,
     providerId: text(input.providerId, "providerId", 127), query: text(input.query, "query", 2_048),
@@ -148,13 +161,14 @@ export function researchSourceContract(input) {
   return Object.freeze({ schemaVersion: RESEARCH_CONTRACT_VERSION, sourceId: opaqueId(input.sourceId, "sourceId"), runId: opaqueId(input.runId, "runId"),
     queryId: opaqueId(input.queryId, "queryId"), canonicalUrl: new URL(text(input.canonicalUrl, "canonicalUrl", 4_096)).toString(),
     urlDigest: digest(input.urlDigest, "urlDigest"), sourceClusterId: opaqueId(input.sourceClusterId, "sourceClusterId"), tier: input.tier, lineage: input.lineage,
-    artifactType: text(input.artifactType, "artifactType", 63), artifactId: opaqueId(input.artifactId, "artifactId"),
+    artifactType: text(input.artifactType, "artifactType", 63), artifactId: text(input.artifactId, "artifactId", 255),
     artifactDigest: digest(input.artifactDigest, "artifactDigest"), retrievedAt: iso(input.retrievedAt, "retrievedAt") });
 }
 
 export function researchCitationContract(input) {
   exact(input, ["schemaVersion", "citationId", "sourceId", "quote", "quoteDigest", "locator", "verified"], "research citation");
   version(input, "research citation");
+  if (typeof input.verified !== "boolean") throw new TypeError("verified must be boolean");
   return Object.freeze({ schemaVersion: RESEARCH_CONTRACT_VERSION, citationId: opaqueId(input.citationId, "citationId"), sourceId: opaqueId(input.sourceId, "sourceId"),
     quote: text(input.quote, "quote", 16_384), quoteDigest: digest(input.quoteDigest, "quoteDigest"), locator: canonicalObject(input.locator, "locator", 4_096),
     verified: input.verified === true });
@@ -176,6 +190,7 @@ export function researchReportContract(input) {
   version(input, "research report");
   if (!RUN_OUTCOMES.has(input.outcome)) throw new TypeError("report outcome is invalid");
   exact(input.usage, ["searchCalls", "contentUrls", "modelTokens", "costMicrosUsd"], "report usage");
+  if (!Array.isArray(input.questionAnswers) || input.questionAnswers.length > 64) throw new TypeError("questionAnswers must be a bounded array");
   return Object.freeze({ schemaVersion: RESEARCH_CONTRACT_VERSION, reportId: opaqueId(input.reportId, "reportId"), runId: opaqueId(input.runId, "runId"),
     outcome: input.outcome, stopReason: text(input.stopReason, "stopReason", 127),
     questionAnswers: Object.freeze(input.questionAnswers.map((item) => canonicalObject(item, "questionAnswer", 16_384))),

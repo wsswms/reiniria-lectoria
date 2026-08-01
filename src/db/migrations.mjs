@@ -2140,7 +2140,7 @@ export const MIGRATIONS = Object.freeze([
         approved_at TEXT NOT NULL,
         expires_at TEXT NOT NULL CHECK(expires_at > approved_at),
         PRIMARY KEY (workspace_id, grant_id),
-        UNIQUE (workspace_id, request_id, request_revision_id, grant_id),
+        UNIQUE (workspace_id, request_id, request_revision_id),
         FOREIGN KEY (workspace_id, approval_decision_id, request_id, request_revision_id, approval_decision)
           REFERENCES research_request_decisions(workspace_id, decision_id, request_id, request_revision_id, decision)
       ) STRICT;

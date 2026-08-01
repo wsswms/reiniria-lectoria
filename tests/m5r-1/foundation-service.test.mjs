@@ -19,7 +19,8 @@ function requestInput(setup, bound, overrides = {}) {
 
 function grantInput(request, overrides = {}) {
   return { schemaVersion: "1.0", grantId: randomUUID(), requestId: request.requestId, requestRevisionId: request.revisionId,
-    providers: [{ capability: "search", providerId: "brave-search", fallbackOrder: 0 }], limits: { ...RESEARCH_LIMITS.defaults },
+    providers: [{ capability: "search", providerId: "brave-search", fallbackOrder: 0,
+      budget: { maxSearchCalls: 12, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0 } }], limits: { ...RESEARCH_LIMITS.defaults },
     allowedDomains: ["example.com"], allowedLanguages: ["en", "zh-CN"], approvedBy: user,
     approvedAt: new Date(0).toISOString(), expiresAt: new Date(1_800_000).toISOString(), ...overrides };
 }
