@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "m5r-5-result-v1",
+  "environment": {
+    "platform": "linux/arm64",
+    "node": "22.19.0",
+    "network": "none",
+    "rootFilesystem": "read-only",
+    "temporaryFilesystem": "tmpfs"
+  },
+  "closedLoop": {
+    "documents": 18,
+    "translationDirections": 6,
+    "formats": 3,
+    "requestDecisions": {
+      "approved": 6,
+      "rejected": 6,
+      "canceled": 6
+    },
+    "historyPreservingRetranslations": 6,
+    "supportedReports": 6,
+    "independentProposals": 12,
+    "backupRestores": 30
+  },
+  "cacheInventory": {
+    "coverage": 1,
+    "artifactClasses": 6,
+    "derivedFtsBytes": 49152
+  },
+  "verification": {
+    "m5r5Tests": 8,
+    "fullRegressionTests": 293,
+    "fullRegressionSuites": 26,
+    "npmAuditVulnerabilities": 0,
+    "sbomFormat": "CycloneDX 1.5",
+    "sbomComponents": 195,
+    "sbomDependencies": 196,
+    "testImageDigest": "sha256:e7d0b46f2dfbc2369b8210dc621b87539ec24feaaec15f5a6d75742ca9a6e36d",
+    "runnerImageDigest": "sha256:23dfc5174689e402760fab09bbc82ddc464c729585e1f9987d9c3c08a9abc9f8",
+    "runnerBaseDigest": "sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50",
+    "runnerCriticalVulnerabilities": 0,
+    "runnerHighVulnerabilities": 0
+  },
+  "externalCalls": {
+    "braveSearch": 0,
+    "serperSearch": 0,
+    "restrictedFetch": 0,
+    "tavilySearch": 0,
+    "tavilyExtract": 0,
+    "researchModels": 0
+  },
+  "conclusion": "go"
+}
