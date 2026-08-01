@@ -1,0 +1,22 @@
+FROM node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90 AS dependencies
+
+WORKDIR /app
+COPY runner/package.json runner/package-lock.json ./
+RUN npm ci --ignore-scripts && npm cache clean --force
+
+FROM gcr.io/distroless/nodejs22-debian13@sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50
+
+ENV NODE_ENV=production \
+    HOME=/tmp/runner-home
+
+WORKDIR /app
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY runner/package.json runner/package-lock.json ./
+COPY src/domain/contracts.mjs ./src/domain/contracts.mjs
+COPY src/provider/contracts.mjs ./src/provider/contracts.mjs
+COPY src/runner/protocol.mjs ./src/runner/protocol.mjs
+COPY src/runner/runner-entry.mjs ./src/runner/runner-entry.mjs
+COPY src/runner/boundary-probe.mjs ./src/runner/boundary-probe.mjs
+
+ENTRYPOINT ["/nodejs/bin/node", "--permission", "--allow-fs-read=/app", "--allow-fs-read=/tmp", "--allow-fs-read=/sys/fs/cgroup"]
+CMD ["src/runner/runner-entry.mjs"]

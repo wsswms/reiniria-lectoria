@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -935,6 +935,456 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER export_artifact_metadata_no_delete
       BEFORE DELETE ON export_artifact_metadata
       BEGIN SELECT RAISE(ABORT, 'export metadata is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 11,
+    name: "provider-task-attempt-foundation",
+    sql: `
+      CREATE TABLE translation_tasks (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        policy_version TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('queued', 'running', 'paused', 'completed', 'failed', 'canceled')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id),
+        UNIQUE (workspace_id, workflow_id, idempotency_key),
+        UNIQUE (workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language)
+      ) STRICT;
+
+      CREATE TABLE translation_attempts (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 127),
+        model_id TEXT NOT NULL CHECK(length(model_id) BETWEEN 1 AND 255),
+        prompt_version TEXT NOT NULL,
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        state TEXT NOT NULL CHECK(state IN ('queued', 'leased', 'running', 'retry-wait', 'completed', 'failed', 'canceled', 'unknown-outcome')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        PRIMARY KEY (workspace_id, attempt_id),
+        UNIQUE (workspace_id, task_id, segment_id, attempt_id),
+        UNIQUE (workspace_id, attempt_id, task_id),
+        UNIQUE (workspace_id, attempt_id, task_id, provider_id, model_id),
+        FOREIGN KEY (workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_tasks(workspace_id, task_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE attempt_events (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        details_json TEXT NOT NULL CHECK(json_valid(details_json)),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE capability_grants (
+        workspace_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        token_digest TEXT NOT NULL CHECK(length(token_digest) = 71 AND substr(token_digest, 1, 7) = 'sha256:'),
+        scopes_json TEXT NOT NULL CHECK(json_valid(scopes_json) AND json_type(scopes_json) = 'array'),
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, grant_id),
+        UNIQUE (workspace_id, token_digest),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE usage_cost_records (
+        workspace_id TEXT NOT NULL,
+        usage_record_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        provider_response_id TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL CHECK(input_tokens >= 0),
+        output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+        cached_input_tokens INTEGER NOT NULL CHECK(cached_input_tokens >= 0 AND cached_input_tokens <= input_tokens),
+        total_tokens INTEGER NOT NULL CHECK(total_tokens = input_tokens + output_tokens),
+        currency TEXT,
+        amount_micros INTEGER CHECK(amount_micros >= 0),
+        pricing_version TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, usage_record_id),
+        UNIQUE (workspace_id, attempt_id, provider_response_id),
+        CHECK((currency IS NULL AND amount_micros IS NULL) OR (currency IS NOT NULL AND amount_micros IS NOT NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id, provider_id, model_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id, provider_id, model_id)
+      ) STRICT;
+
+      CREATE TRIGGER attempt_events_no_update
+      BEFORE UPDATE ON attempt_events
+      BEGIN SELECT RAISE(ABORT, 'attempt event is append-only'); END;
+      CREATE TRIGGER attempt_events_no_delete
+      BEFORE DELETE ON attempt_events
+      BEGIN SELECT RAISE(ABORT, 'attempt event is append-only'); END;
+      CREATE TRIGGER capability_grants_no_update
+      BEFORE UPDATE ON capability_grants
+      BEGIN SELECT RAISE(ABORT, 'capability grant is immutable'); END;
+      CREATE TRIGGER capability_grants_no_delete
+      BEFORE DELETE ON capability_grants
+      BEGIN SELECT RAISE(ABORT, 'capability grant is immutable'); END;
+      CREATE TRIGGER usage_cost_records_no_update
+      BEFORE UPDATE ON usage_cost_records
+      BEGIN SELECT RAISE(ABORT, 'usage cost record is immutable'); END;
+      CREATE TRIGGER usage_cost_records_no_delete
+      BEFORE DELETE ON usage_cost_records
+      BEGIN SELECT RAISE(ABORT, 'usage cost record is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 12,
+    name: "translation-task-runtime-state",
+    sql: `
+      CREATE TABLE task_execution_policies (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 10),
+        batch_size INTEGER NOT NULL CHECK(batch_size BETWEEN 1 AND 100),
+        offline_reason TEXT,
+        PRIMARY KEY (workspace_id, task_id),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE attempt_runtime_states (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL CHECK(attempt_number BETWEEN 1 AND 10),
+        lease_holder TEXT,
+        lease_expires_at TEXT,
+        heartbeat_at TEXT,
+        next_retry_at TEXT,
+        error_category TEXT,
+        provider_call_state TEXT NOT NULL CHECK(provider_call_state IN ('not-started', 'started', 'completed', 'unknown')),
+        outcome_digest TEXT,
+        PRIMARY KEY (workspace_id, attempt_id),
+        UNIQUE (workspace_id, task_id, segment_id, attempt_number),
+        CHECK((lease_holder IS NULL AND lease_expires_at IS NULL) OR (lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id),
+        FOREIGN KEY (workspace_id, task_id, segment_id, attempt_id)
+          REFERENCES translation_attempts(workspace_id, task_id, segment_id, attempt_id)
+      ) STRICT;
+
+      CREATE TABLE task_command_results (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_digest TEXT NOT NULL,
+        result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, operation, idempotency_key),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE INDEX runnable_attempts
+        ON translation_attempts(workspace_id, state, created_at);
+      CREATE INDEX retry_schedule
+        ON attempt_runtime_states(workspace_id, next_retry_at)
+        WHERE next_retry_at IS NOT NULL;
+
+      CREATE TRIGGER task_command_results_no_update
+      BEFORE UPDATE ON task_command_results
+      BEGIN SELECT RAISE(ABORT, 'task command result is immutable'); END;
+      CREATE TRIGGER task_command_results_no_delete
+      BEFORE DELETE ON task_command_results
+      BEGIN SELECT RAISE(ABORT, 'task command result is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 13,
+    name: "machine-candidate-provenance",
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE translation_candidates_v13 (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('user', 'local-fixture', 'machine')),
+        text TEXT NOT NULL,
+        text_digest TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        UNIQUE (workspace_id, workflow_id, segment_id, candidate_id),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      INSERT INTO translation_candidates_v13 SELECT * FROM translation_candidates;
+
+      CREATE TABLE candidate_creation_events_v13 (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates_v13(workspace_id, workflow_id, segment_id, candidate_id)
+      ) STRICT;
+
+      INSERT INTO candidate_creation_events_v13 SELECT * FROM candidate_creation_events;
+
+      DROP TRIGGER candidate_creation_events_no_update;
+      DROP TRIGGER candidate_creation_events_no_delete;
+      DROP TRIGGER translation_candidates_no_update;
+      DROP TRIGGER translation_candidates_no_delete;
+      DROP TABLE candidate_creation_events;
+      DROP TABLE translation_candidates;
+      ALTER TABLE translation_candidates_v13 RENAME TO translation_candidates;
+      ALTER TABLE candidate_creation_events_v13 RENAME TO candidate_creation_events;
+
+      CREATE UNIQUE INDEX machine_candidate_attempt_identity
+        ON translation_attempts(
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        );
+      CREATE UNIQUE INDEX machine_candidate_attempt_outcome
+        ON attempt_runtime_states(workspace_id, attempt_id, outcome_digest);
+
+      CREATE TABLE machine_candidate_provenance (
+        workspace_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        output_digest TEXT NOT NULL CHECK(length(output_digest) = 71 AND substr(output_digest, 1, 7) = 'sha256:'),
+        generation_mode TEXT NOT NULL CHECK(generation_mode IN ('default', 'user-requested')),
+        user_command_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, candidate_id),
+        UNIQUE (workspace_id, attempt_id),
+        CHECK((generation_mode = 'default' AND user_command_id IS NULL) OR
+              (generation_mode = 'user-requested' AND length(user_command_id) > 0)),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, candidate_id)
+          REFERENCES translation_candidates(workspace_id, workflow_id, segment_id, candidate_id),
+        FOREIGN KEY (
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        ) REFERENCES translation_attempts(
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id,
+          target_language, segment_id, provider_id, model_id, prompt_version,
+          context_digest, request_digest
+        ),
+        FOREIGN KEY (workspace_id, attempt_id, output_digest)
+          REFERENCES attempt_runtime_states(workspace_id, attempt_id, outcome_digest)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_default_machine_candidate
+        ON machine_candidate_provenance(workspace_id, task_id, segment_id)
+        WHERE generation_mode = 'default';
+
+      CREATE TRIGGER translation_candidates_no_update
+      BEFORE UPDATE ON translation_candidates
+      BEGIN SELECT RAISE(ABORT, 'translation candidate is immutable'); END;
+      CREATE TRIGGER translation_candidates_no_delete
+      BEFORE DELETE ON translation_candidates
+      BEGIN SELECT RAISE(ABORT, 'translation candidate is immutable'); END;
+      CREATE TRIGGER candidate_creation_events_no_update
+      BEFORE UPDATE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+      CREATE TRIGGER candidate_creation_events_no_delete
+      BEFORE DELETE ON candidate_creation_events
+      BEGIN SELECT RAISE(ABORT, 'candidate creation event is immutable'); END;
+      CREATE TRIGGER machine_candidate_provenance_no_update
+      BEFORE UPDATE ON machine_candidate_provenance
+      BEGIN SELECT RAISE(ABORT, 'machine candidate provenance is immutable'); END;
+      CREATE TRIGGER machine_candidate_provenance_no_delete
+      BEFORE DELETE ON machine_candidate_provenance
+      BEGIN SELECT RAISE(ABORT, 'machine candidate provenance is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 14,
+    name: "pricing-budget-offline-controls",
+    sql: `
+      CREATE TABLE pricing_snapshots (
+        workspace_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        pricing_version TEXT NOT NULL,
+        currency TEXT NOT NULL CHECK(length(currency) = 3 AND currency = upper(currency)),
+        input_micros_per_million INTEGER NOT NULL CHECK(input_micros_per_million >= 0),
+        output_micros_per_million INTEGER NOT NULL CHECK(output_micros_per_million >= 0),
+        cached_input_micros_per_million INTEGER NOT NULL CHECK(cached_input_micros_per_million >= 0),
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, provider_id, model_id, pricing_version),
+        UNIQUE (workspace_id, provider_id, model_id, pricing_version, currency),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE budget_policy_snapshots (
+        workspace_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        currency TEXT NOT NULL CHECK(length(currency) = 3 AND currency = upper(currency)),
+        soft_limit_micros INTEGER NOT NULL CHECK(soft_limit_micros >= 0),
+        hard_limit_micros INTEGER NOT NULL CHECK(hard_limit_micros >= soft_limit_micros),
+        unknown_price_action TEXT NOT NULL CHECK(unknown_price_action IN ('pause', 'block')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, policy_version),
+        FOREIGN KEY (workspace_id) REFERENCES workspace_meta(workspace_id)
+      ) STRICT;
+
+      CREATE TABLE task_budget_assignments (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        task_soft_limit_micros INTEGER,
+        task_hard_limit_micros INTEGER,
+        state TEXT NOT NULL CHECK(state IN ('active', 'soft-paused', 'hard-blocked', 'unknown-paused')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        PRIMARY KEY (workspace_id, task_id),
+        CHECK((task_soft_limit_micros IS NULL AND task_hard_limit_micros IS NULL) OR
+              (task_soft_limit_micros >= 0 AND task_hard_limit_micros >= task_soft_limit_micros)),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id),
+        FOREIGN KEY (workspace_id, policy_version) REFERENCES budget_policy_snapshots(workspace_id, policy_version)
+      ) STRICT;
+
+      CREATE TABLE budget_soft_approvals (
+        workspace_id TEXT NOT NULL,
+        approval_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, approval_id),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE budget_reservations (
+        workspace_id TEXT NOT NULL,
+        reservation_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        pricing_version TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        estimated_input_tokens INTEGER NOT NULL CHECK(estimated_input_tokens >= 0),
+        estimated_output_tokens INTEGER NOT NULL CHECK(estimated_output_tokens >= 0),
+        estimated_cached_input_tokens INTEGER NOT NULL CHECK(estimated_cached_input_tokens >= 0 AND estimated_cached_input_tokens <= estimated_input_tokens),
+        estimated_amount_micros INTEGER NOT NULL CHECK(estimated_amount_micros >= 0),
+        actual_amount_micros INTEGER CHECK(actual_amount_micros >= 0),
+        usage_record_id TEXT,
+        approval_id TEXT,
+        state TEXT NOT NULL CHECK(state IN ('reserved', 'consumed', 'released', 'unknown')),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        created_at TEXT NOT NULL,
+        finalized_at TEXT,
+        PRIMARY KEY (workspace_id, reservation_id),
+        UNIQUE (workspace_id, attempt_id),
+        UNIQUE (workspace_id, approval_id),
+        CHECK(
+          (state = 'reserved' AND actual_amount_micros IS NULL AND usage_record_id IS NULL AND finalized_at IS NULL) OR
+          (state = 'consumed' AND actual_amount_micros IS NOT NULL AND usage_record_id IS NOT NULL AND finalized_at IS NOT NULL) OR
+          (state = 'unknown' AND actual_amount_micros IS NULL AND finalized_at IS NOT NULL) OR
+          (state = 'released' AND actual_amount_micros IS NULL AND finalized_at IS NOT NULL)
+        ),
+        FOREIGN KEY (workspace_id, attempt_id, task_id, provider_id, model_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id, provider_id, model_id),
+        FOREIGN KEY (workspace_id, provider_id, model_id, pricing_version, currency)
+          REFERENCES pricing_snapshots(workspace_id, provider_id, model_id, pricing_version, currency),
+        FOREIGN KEY (workspace_id, task_id)
+          REFERENCES task_budget_assignments(workspace_id, task_id),
+        FOREIGN KEY (workspace_id, usage_record_id)
+          REFERENCES usage_cost_records(workspace_id, usage_record_id),
+        FOREIGN KEY (workspace_id, approval_id)
+          REFERENCES budget_soft_approvals(workspace_id, approval_id)
+      ) STRICT;
+
+      CREATE TRIGGER pricing_snapshots_no_update BEFORE UPDATE ON pricing_snapshots
+      BEGIN SELECT RAISE(ABORT, 'pricing snapshot is immutable'); END;
+      CREATE TRIGGER pricing_snapshots_no_delete BEFORE DELETE ON pricing_snapshots
+      BEGIN SELECT RAISE(ABORT, 'pricing snapshot is immutable'); END;
+      CREATE TRIGGER budget_policy_snapshots_no_update BEFORE UPDATE ON budget_policy_snapshots
+      BEGIN SELECT RAISE(ABORT, 'budget policy snapshot is immutable'); END;
+      CREATE TRIGGER budget_policy_snapshots_no_delete BEFORE DELETE ON budget_policy_snapshots
+      BEGIN SELECT RAISE(ABORT, 'budget policy snapshot is immutable'); END;
+      CREATE TRIGGER budget_soft_approvals_no_update BEFORE UPDATE ON budget_soft_approvals
+      BEGIN SELECT RAISE(ABORT, 'budget approval is immutable'); END;
+      CREATE TRIGGER budget_soft_approvals_no_delete BEFORE DELETE ON budget_soft_approvals
+      BEGIN SELECT RAISE(ABORT, 'budget approval is immutable'); END;
+      CREATE TRIGGER task_budget_assignments_state_guard
+      BEFORE UPDATE ON task_budget_assignments
+      WHEN NEW.policy_version <> OLD.policy_version
+        OR NEW.task_soft_limit_micros IS NOT OLD.task_soft_limit_micros
+        OR NEW.task_hard_limit_micros IS NOT OLD.task_hard_limit_micros
+        OR NEW.version <> OLD.version + 1 OR (OLD.state || '->' || NEW.state) NOT IN (
+        'active->soft-paused', 'active->hard-blocked', 'active->unknown-paused',
+        'soft-paused->active', 'unknown-paused->active'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid task budget transition'); END;
+      CREATE TRIGGER task_budget_assignments_no_delete BEFORE DELETE ON task_budget_assignments
+      BEGIN SELECT RAISE(ABORT, 'task budget assignment is immutable'); END;
+      CREATE TRIGGER budget_reservations_state_guard
+      BEFORE UPDATE ON budget_reservations
+      WHEN NEW.task_id <> OLD.task_id OR NEW.attempt_id <> OLD.attempt_id
+        OR NEW.provider_id <> OLD.provider_id OR NEW.model_id <> OLD.model_id
+        OR NEW.pricing_version <> OLD.pricing_version OR NEW.currency <> OLD.currency
+        OR NEW.estimated_input_tokens <> OLD.estimated_input_tokens
+        OR NEW.estimated_output_tokens <> OLD.estimated_output_tokens
+        OR NEW.estimated_cached_input_tokens <> OLD.estimated_cached_input_tokens
+        OR NEW.estimated_amount_micros <> OLD.estimated_amount_micros
+        OR NEW.approval_id IS NOT OLD.approval_id OR NEW.created_at <> OLD.created_at
+        OR NEW.version <> OLD.version + 1 OR (OLD.state || '->' || NEW.state) NOT IN (
+        'reserved->consumed', 'reserved->released', 'reserved->unknown', 'unknown->consumed', 'unknown->released'
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid budget reservation transition'); END;
+      CREATE TRIGGER budget_reservations_no_delete BEFORE DELETE ON budget_reservations
+      BEGIN SELECT RAISE(ABORT, 'budget reservation is immutable'); END;
     `,
   }),
 ]);
