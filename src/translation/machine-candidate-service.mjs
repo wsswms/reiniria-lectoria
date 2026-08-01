@@ -66,6 +66,13 @@ export class MachineCandidateService {
       workflowId: attempt.workflowId,
       segmentIds: [attempt.segmentId],
       promptVersion: attempt.promptVersion,
+      ...(() => {
+        const evidenceIds = this.database.prepare(`
+          SELECT evidence_id AS evidenceId FROM attempt_evidence_bindings
+          WHERE workspace_id = ? AND attempt_id = ? ORDER BY evidence_digest, evidence_id
+        `).all(this.workspaceId, attemptId).map((row) => row.evidenceId);
+        return evidenceIds.length === 0 ? {} : { evidenceIds };
+      })(),
     });
     if (context.contextDigest !== attempt.contextDigest) throw new MachineCandidateConflictError("stored context digest mismatch");
     const parsed = parseModelResponse(responseInput, context, limits);

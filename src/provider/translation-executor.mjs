@@ -34,6 +34,7 @@ export class TranslationExecutor {
     orchestrator,
     budgets,
     candidates,
+    evidenceService,
   } = {}) {
     if (typeof invokeProvider !== "function") throw new TypeError("invokeProvider is required");
     if (!Number.isSafeInteger(estimatedOutputTokens) || estimatedOutputTokens < 1) throw new TypeError("estimatedOutputTokens is invalid");
@@ -47,6 +48,22 @@ export class TranslationExecutor {
     this.tasks = orchestrator ?? new TranslationTaskOrchestrator(database, trustedWorkspaceId, { now });
     this.budgets = budgets ?? new PricingBudgetService(database, trustedWorkspaceId, { now });
     this.candidates = candidates ?? new MachineCandidateService(database, trustedWorkspaceId, { now });
+    if (evidenceService !== undefined && (!evidenceService || typeof evidenceService.evidenceIdsForAttempt !== "function"
+      || typeof evidenceService.assertCurrent !== "function")) throw new TypeError("evidenceService is invalid");
+    this.evidenceService = evidenceService;
+  }
+
+  #evidenceIds(attemptId) {
+    const rows = this.database.prepare(`
+      SELECT evidence_id AS evidenceId FROM attempt_evidence_bindings
+      WHERE workspace_id = ? AND attempt_id = ? ORDER BY evidence_digest, evidence_id
+    `).all(this.workspaceId, attemptId);
+    if (rows.length > 0 && !this.evidenceService) throw new Error("evidence service is required for evidence-bound attempts");
+    return rows.map((row) => row.evidenceId);
+  }
+
+  #assertEvidence(evidenceIds) {
+    for (const evidenceId of evidenceIds) this.evidenceService.assertCurrent(evidenceId);
   }
 
   #nextUnreserved() {
@@ -69,10 +86,13 @@ export class TranslationExecutor {
   #ensureReservation() {
     const next = this.#nextUnreserved();
     if (!next) return null;
+    const evidenceIds = this.#evidenceIds(next.attemptId);
+    this.#assertEvidence(evidenceIds);
     const context = buildContextManifest(this.database, this.workspaceId, {
       workflowId: next.workflowId,
       segmentIds: [next.segmentId],
       promptVersion: next.promptVersion,
+      ...(evidenceIds.length === 0 ? {} : { evidenceIds }),
     });
     try {
       return this.budgets.reserve(next.attemptId, this.pricingVersion, {
@@ -97,13 +117,20 @@ export class TranslationExecutor {
     const reservation = this.database.prepare("SELECT * FROM budget_reservations WHERE workspace_id = ? AND attempt_id = ? AND state = 'reserved'")
       .get(this.workspaceId, lease.attempt_id);
     if (!reservation) throw new Error("leased attempt has no active budget reservation");
-    const context = buildContextManifest(this.database, this.workspaceId, {
-      workflowId: lease.workflow_id,
-      segmentIds: [lease.segment_id],
-      promptVersion: lease.prompt_version,
-    });
-    if (context.contextDigest !== lease.context_digest) throw new Error("attempt context digest mismatch");
-    const request = providerRequestContract({
+    let evidenceIds;
+    let context;
+    let request;
+    try {
+      evidenceIds = this.#evidenceIds(lease.attempt_id);
+      this.#assertEvidence(evidenceIds);
+      context = buildContextManifest(this.database, this.workspaceId, {
+        workflowId: lease.workflow_id,
+        segmentIds: [lease.segment_id],
+        promptVersion: lease.prompt_version,
+        ...(evidenceIds.length === 0 ? {} : { evidenceIds }),
+      });
+      if (context.contextDigest !== lease.context_digest) throw Object.assign(new Error("attempt context digest mismatch"), { category: "policy", retryable: false });
+      request = providerRequestContract({
       workspaceId: this.workspaceId,
       taskId: lease.task_id,
       attemptId: lease.attempt_id,
@@ -121,7 +148,13 @@ export class TranslationExecutor {
         sourceText: segment.sourceText,
         protected: segment.protected,
       })),
-    });
+      ...(context.manifest.evidence ? { evidence: context.manifest.evidence } : {}),
+      });
+    } catch (error) {
+      const normalized = normalizedFailure(error);
+      try { this.tasks.fail(lease.attempt_id, lease.version, this.workerId, normalized); this.budgets.release(reservation.reservation_id); } catch {}
+      return Object.freeze({ status: "failed", attemptId: lease.attempt_id, error: normalized });
+    }
     const running = this.tasks.startProvider(lease.attempt_id, lease.version, this.workerId);
     let providerResponse;
     let strictResponse;
@@ -152,6 +185,7 @@ export class TranslationExecutor {
       } catch {
         throw Object.assign(new Error("model response validation failed"), { category: "malformed-response", retryable: false });
       }
+      for (const evidenceId of evidenceIds) this.evidenceService.assertCurrent(evidenceId);
     } catch (error) {
       const normalized = normalizedFailure(error);
       try {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -1502,6 +1502,105 @@ export const MIGRATIONS = Object.freeze([
             AND (OLD.state || '->' || NEW.state) IN ('active->inactive', 'inactive->active'))
         )
       BEGIN SELECT RAISE(ABORT, 'invalid knowledge fact head update'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 16,
+    name: "retrieval-evidence-snapshots",
+    sql: `
+      CREATE UNIQUE INDEX knowledge_revision_evidence_identity
+        ON knowledge_fact_revisions(workspace_id, fact_id, kind, revision_id, language, content_digest);
+
+      CREATE UNIQUE INDEX evidence_attempt_identity
+        ON translation_attempts(
+          workspace_id, attempt_id, task_id, workflow_id, source_revision_id, target_language, segment_id
+        );
+
+      CREATE TABLE knowledge_evidence_snapshots (
+        workspace_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        query_json TEXT NOT NULL CHECK(
+          json_valid(query_json) AND json_type(query_json) = 'object'
+          AND json_extract(query_json, '$.language') = target_language
+          AND length(json_extract(query_json, '$.text')) BETWEEN 1 AND 512
+        ),
+        filters_json TEXT NOT NULL CHECK(
+          json_valid(filters_json) AND json_type(filters_json) = 'object'
+          AND json_array_length(json_extract(filters_json, '$.documentIds')) = 1
+          AND json_extract(filters_json, '$.documentIds[0]') = document_id
+          AND json_extract(filters_json, '$.topK') BETWEEN 1 AND 20
+        ),
+        retriever_version TEXT NOT NULL,
+        query_policy_version TEXT NOT NULL,
+        index_digest TEXT NOT NULL CHECK(length(index_digest) = 71 AND substr(index_digest, 1, 7) = 'sha256:'),
+        evidence_digest TEXT NOT NULL CHECK(length(evidence_digest) = 71 AND substr(evidence_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, evidence_id),
+        UNIQUE (workspace_id, evidence_digest),
+        UNIQUE (workspace_id, evidence_id, evidence_digest),
+        UNIQUE (workspace_id, evidence_id, workflow_id, source_revision_id, target_language, segment_id),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language),
+        FOREIGN KEY (workspace_id, source_revision_id, segment_id)
+          REFERENCES source_segment_versions(workspace_id, source_revision_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_evidence_hits (
+        workspace_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        rank INTEGER NOT NULL CHECK(rank BETWEEN 1 AND 50),
+        fact_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'style', 'knowledge')),
+        language TEXT NOT NULL,
+        matched_field TEXT NOT NULL CHECK(matched_field IN ('title', 'body', 'terms', 'tags')),
+        snippet TEXT NOT NULL CHECK(length(snippet) BETWEEN 1 AND 4096),
+        snippet_digest TEXT NOT NULL CHECK(length(snippet_digest) = 71 AND substr(snippet_digest, 1, 7) = 'sha256:'),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        score REAL NOT NULL,
+        PRIMARY KEY (workspace_id, evidence_id, rank),
+        UNIQUE (workspace_id, evidence_id, fact_id, revision_id),
+        FOREIGN KEY (workspace_id, evidence_id) REFERENCES knowledge_evidence_snapshots(workspace_id, evidence_id),
+        FOREIGN KEY (workspace_id, fact_id, kind, revision_id, language, content_digest)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, kind, revision_id, language, content_digest)
+      ) STRICT;
+
+      CREATE TABLE attempt_evidence_bindings (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        evidence_digest TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, attempt_id, evidence_id),
+        FOREIGN KEY (workspace_id, attempt_id, task_id, workflow_id, source_revision_id, target_language, segment_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id, workflow_id, source_revision_id, target_language, segment_id),
+        FOREIGN KEY (workspace_id, evidence_id, workflow_id, source_revision_id, target_language, segment_id)
+          REFERENCES knowledge_evidence_snapshots(workspace_id, evidence_id, workflow_id, source_revision_id, target_language, segment_id),
+        FOREIGN KEY (workspace_id, evidence_id, evidence_digest)
+          REFERENCES knowledge_evidence_snapshots(workspace_id, evidence_id, evidence_digest)
+      ) STRICT;
+
+      CREATE TRIGGER knowledge_evidence_snapshots_no_update BEFORE UPDATE ON knowledge_evidence_snapshots
+      BEGIN SELECT RAISE(ABORT, 'knowledge evidence snapshot is immutable'); END;
+      CREATE TRIGGER knowledge_evidence_snapshots_no_delete BEFORE DELETE ON knowledge_evidence_snapshots
+      BEGIN SELECT RAISE(ABORT, 'knowledge evidence snapshot is immutable'); END;
+      CREATE TRIGGER knowledge_evidence_hits_no_update BEFORE UPDATE ON knowledge_evidence_hits
+      BEGIN SELECT RAISE(ABORT, 'knowledge evidence hit is immutable'); END;
+      CREATE TRIGGER knowledge_evidence_hits_no_delete BEFORE DELETE ON knowledge_evidence_hits
+      BEGIN SELECT RAISE(ABORT, 'knowledge evidence hit is immutable'); END;
+      CREATE TRIGGER attempt_evidence_bindings_no_update BEFORE UPDATE ON attempt_evidence_bindings
+      BEGIN SELECT RAISE(ABORT, 'attempt evidence binding is immutable'); END;
+      CREATE TRIGGER attempt_evidence_bindings_no_delete BEFORE DELETE ON attempt_evidence_bindings
+      BEGIN SELECT RAISE(ABORT, 'attempt evidence binding is immutable'); END;
     `,
   }),
 ]);

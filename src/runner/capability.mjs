@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { stableJson } from "../domain/contracts.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const ALLOWED_SCOPES = new Set(["segment:read", "candidate:submit"]);
+const ALLOWED_SCOPES = new Set(["segment:read", "candidate:submit", "term:lookup", "knowledge:search"]);
 
 const encode = (value) => Buffer.from(value).toString("base64url");
 const digestToken = (token) => `sha256:${createHash("sha256").update(token).digest("hex")}`;

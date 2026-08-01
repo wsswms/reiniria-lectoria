@@ -26,14 +26,14 @@ function createAtVersion(filename, version) {
   return { database, workspaceId };
 }
 
-test("schemas v1 through v14 migrate to v15 ten times without losing historical identity", async () => {
-  for (let version = 1; version <= 14; version += 1) for (let repeat = 0; repeat < 10; repeat += 1) {
+test(`schemas v1 through v${CURRENT_SCHEMA_VERSION - 1} migrate to v${CURRENT_SCHEMA_VERSION} ten times without losing historical identity`, async () => {
+  for (let version = 1; version < CURRENT_SCHEMA_VERSION; version += 1) for (let repeat = 0; repeat < 10; repeat += 1) {
     const root = await mkdtemp(join(tmpdir(), `lectoria-m5-1-v${version}-`));
     const filename = join(root, "app.sqlite3");
     const historical = createAtVersion(filename, version);
     historical.database.close();
     const database = openWorkspaceDatabase(filename, { workspaceId: historical.workspaceId });
-    assert.equal(database.pragma("user_version", { simple: true }), 15);
+    assert.equal(database.pragma("user_version", { simple: true }), CURRENT_SCHEMA_VERSION);
     assert.equal(database.prepare("SELECT workspace_id FROM workspace_meta").get().workspace_id, historical.workspaceId);
     assertDatabaseIntegrity(database);
     database.close();
@@ -41,14 +41,15 @@ test("schemas v1 through v14 migrate to v15 ten times without losing historical 
   }
 });
 
-test("schema 15 fault points leave only retryable v14 or complete v15", async () => {
-  for (const point of ["before-migration-15", "after-sql-15", "after-commit-15"]) for (let repeat = 0; repeat < 10; repeat += 1) {
+test(`schema ${CURRENT_SCHEMA_VERSION} fault points leave only retryable previous or complete current schema`, async () => {
+  const previous = CURRENT_SCHEMA_VERSION - 1;
+  for (const point of [`before-migration-${CURRENT_SCHEMA_VERSION}`, `after-sql-${CURRENT_SCHEMA_VERSION}`, `after-commit-${CURRENT_SCHEMA_VERSION}`]) for (let repeat = 0; repeat < 10; repeat += 1) {
     const root = await mkdtemp(join(tmpdir(), "lectoria-m5-1-fault-"));
     const filename = join(root, "app.sqlite3");
-    const historical = createAtVersion(filename, 14);
+    const historical = createAtVersion(filename, previous);
     try {
       assert.throws(() => applyMigrations(historical.database, { inject(current) { if (current === point) throw new Error(`injected ${point}`); } }), /injected/);
-      assert.ok([14, 15].includes(historical.database.pragma("user_version", { simple: true })));
+      assert.ok([previous, CURRENT_SCHEMA_VERSION].includes(historical.database.pragma("user_version", { simple: true })));
     } finally { historical.database.close(); }
     const reopened = openWorkspaceDatabase(filename, { workspaceId: historical.workspaceId });
     assert.equal(reopened.pragma("user_version", { simple: true }), CURRENT_SCHEMA_VERSION);
