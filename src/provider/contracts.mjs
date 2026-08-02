@@ -10,6 +10,7 @@ const NEVER_RETRY = new Set(["auth", "malformed-response", "policy", "budget", "
 const MAX_OUTPUT_TOKENS = 1_000_000;
 const EVIDENCE_KINDS = new Set(["term", "style", "knowledge"]);
 const EVIDENCE_FIELDS = new Set(["title", "body", "terms", "tags"]);
+const CONTEXT_INSTRUCTION_TYPES = new Set(["hard-constraint", "preferred", "background", "disputed", "warning-only"]);
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 function requiredString(value, name) {
@@ -114,6 +115,23 @@ function requestEvidence(input) {
   });
 }
 
+function requestTranslationContext(input, segmentIds) {
+  if (!input || typeof input !== "object" || input.schemaVersion !== "m5c-temporary-context-v1"
+    || !UUID.test(input.contextRevisionId ?? "") || !SHA256.test(input.contextDigest ?? "")
+    || !Array.isArray(input.items) || input.items.length > 256) throw new TypeError("translationContext is invalid");
+  const allowed = new Set(segmentIds);
+  const items = input.items.map((item) => {
+    if (!item || typeof item !== "object" || !UUID.test(item.contextItemId ?? "") || !CONTEXT_INSTRUCTION_TYPES.has(item.instructionType)
+      || !["plan-item", "research-claim", "user-guidance"].includes(item.sourceType) || !SHA256.test(item.sourceDigest ?? "")
+      || !SHA256.test(item.contentDigest ?? "") || !Array.isArray(item.segmentIds) || item.segmentIds.some((id) => !UUID.test(id) || !allowed.has(id))
+      || !item.content || typeof item.content !== "object" || Array.isArray(item.content) || typeof item.affirmative !== "boolean"
+      || (["disputed", "warning-only"].includes(item.instructionType) && item.affirmative)) throw new TypeError("translationContext item is invalid");
+    return Object.freeze({ ...item, segmentIds: Object.freeze([...item.segmentIds]), content: Object.freeze({ ...item.content }) });
+  });
+  if (Buffer.byteLength(JSON.stringify(items)) > 128 * 1024) throw new TypeError("translationContext exceeds limits");
+  return Object.freeze({ schemaVersion: input.schemaVersion, contextRevisionId: input.contextRevisionId, contextDigest: input.contextDigest, items: Object.freeze(items) });
+}
+
 export function providerRequestContract(input) {
   if (!input || typeof input !== "object") throw new TypeError("provider request must be an object");
   if (!Array.isArray(input.segments) || input.segments.length === 0) throw new TypeError("segments must be a non-empty array");
@@ -144,6 +162,7 @@ export function providerRequestContract(input) {
       || Buffer.byteLength(JSON.stringify(evidence)) > 128 * 1024) throw new TypeError("evidence scope or limits are invalid");
     output.evidence = Object.freeze(evidence);
   }
+  if (input.translationContext !== undefined) output.translationContext = requestTranslationContext(input.translationContext, segments.map((segment) => segment.segmentId));
   return Object.freeze(output);
 }
 

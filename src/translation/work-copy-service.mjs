@@ -272,6 +272,15 @@ export class WorkCopyService {
           this.database.prepare("INSERT INTO working_copy_heads VALUES (?, ?, ?, ?, 0)")
             .run(this.workspaceId, workflow.workflowId, segmentId, revisionId);
         }
+        const m5c = this.database.prepare("SELECT 1 FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?").get(this.workspaceId, workflow.workflowId);
+        if (m5c) {
+          const coverage = this.database.prepare(`SELECT
+            (SELECT count(*) FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? AND translatable = 1) AS expected,
+            (SELECT count(*) FROM working_copy_heads WHERE workspace_id = ? AND workflow_id = ?) AS actual`)
+            .get(this.workspaceId, workflow.sourceRevisionId, this.workspaceId, workflow.workflowId);
+          if (coverage.expected === coverage.actual) this.database.prepare("UPDATE translation_workflows SET state = 'editing', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'candidate-valid'")
+            .run(timestamp, this.workspaceId, workflow.workflowId);
+        }
         this.#audit(workflow.workflowId, action, by, true, { segmentId, revisionId, expectedHeadVersion });
         return this.getHead(workflow.workflowId, segmentId);
       })();

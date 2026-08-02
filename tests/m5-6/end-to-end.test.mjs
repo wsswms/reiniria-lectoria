@@ -29,7 +29,7 @@ function withGap(source) {
   return { ...source, content: `${source.content}\n\nNebulon term.` };
 }
 
-test("twelve documents across three formats complete the approved internet knowledge iteration through one API and CLI", async () => {
+test("twelve historical documents preserve the internal approved internet knowledge iteration after product route removal", async () => {
   const fixture = await workspace("lectoria-m5-6-e2e-");
   fixture.clock = { now: () => new Date(0), advance() {} };
   try {
@@ -59,8 +59,7 @@ test("twelve documents across three formats complete the approved internet knowl
       now: fixture.clock.now, workCopies: fixture.workCopies, validation: fixture.validation, quality });
     const api = new WorkflowApi({ imports: fixture.imports,
       reimports: new ReimportService({ database: fixture.database, root: fixture.root, trustedWorkspaceId: fixture.workspaceId, now: fixture.clock.now }),
-      states: fixture.states, workCopies: fixture.workCopies, validation: fixture.validation, quality, reviews, exports,
-      investigations, proposals, iterations, retriever });
+      flowPlans: {}, workCopies: fixture.workCopies, validation: fixture.validation, reviews, exports, retriever });
 
     let completed = 0;
     for (const [index, source] of selected.entries()) {
@@ -68,7 +67,7 @@ test("twelve documents across three formats complete the approved internet knowl
       const imported = await runWorkflowCli(api, ["document:import", JSON.stringify({ format: source.format, content: source.content, title: source.id })]);
       runWorkflowCli(api, ["document:confirm", JSON.stringify({ importId: imported.importId, actor: user })]);
       const workflowId = randomUUID();
-      runWorkflowCli(api, ["workflow:create", JSON.stringify({ importId: imported.importId, workflowId, targetLanguage })]);
+      fixture.states.create({ workflowId, documentId: imported.documentId, sourceRevisionId: imported.sourceRevisionId, targetLanguage }, {}, "editing");
       const bundle = runWorkflowCli(api, ["working-copy:get", JSON.stringify({ workflowId })]);
       const gap = bundle.segments.find((segment) => segment.sourceText.includes("Nebulon"));
       assert.ok(gap);
@@ -79,32 +78,30 @@ test("twelve documents across three formats complete the approved internet knowl
         sourceRevisionId: imported.sourceRevisionId, targetLanguage, segmentId: gap.segmentId }, `m5-6-${index}`, {
         segmentIds: [gap.segmentId],
       }));
-      const investigation = runWorkflowCli(api, ["internet:create", JSON.stringify({ request: {
+      const investigation = investigations.create({
         taskId: task.task.task_id, workflowId, segmentId: gap.segmentId, query: "Nebulon terminology",
         maxResults: 1, country: "US", searchLanguage: "en",
-      }, actor: user })]);
-      const search = await runWorkflowCli(api, ["internet:search", JSON.stringify({ investigationId: investigation.investigationId })]);
-      const snapshot = await runWorkflowCli(api, ["internet:fetch", JSON.stringify({ investigationId: investigation.investigationId,
-        resultId: search.results[0].resultId, handle: search.results[0].handle, actor: user })]);
+      }, user);
+      const search = await investigations.search(investigation.investigationId);
+      const snapshot = await investigations.fetch(investigation.investigationId, search.results[0].resultId, search.results[0].handle, user);
       const proposed = termInput({ language: targetLanguage,
         scope: { targetLanguages: [targetLanguage], tags: [], documentIds: [imported.documentId] },
         content: { term: "Nebulon", preferredTranslations: [{ language: targetLanguage, text: translations[targetLanguage] }],
           forbiddenTranslations: [], variants: [], note: "Approved public synthetic proposal" } });
-      const proposal = runWorkflowCli(api, ["proposal:create", JSON.stringify({ request: { investigationId: investigation.investigationId,
-        fetchSnapshotId: snapshot.fetchSnapshotId, operation: "create", proposedSource: proposed }, actor: { type: "system", id: "proposal-generator" } })]);
-      runWorkflowCli(api, ["proposal:decide", JSON.stringify({ proposalId: proposal.proposalId, expectedVersion: 0,
-        decision: index % 4 === 3 ? "rejected" : "approved", actor: user })]);
+      const proposal = proposals.create({ investigationId: investigation.investigationId,
+        fetchSnapshotId: snapshot.fetchSnapshotId, operation: "create", proposedSource: proposed }, { type: "system", id: "proposal-generator" });
+      proposals.decide(proposal.proposalId, 0, index % 4 === 3 ? "rejected" : "approved", user);
       if (index % 4 === 3) {
-        await assert.rejects(runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: proposal.proposalId, actor: user })]), /not approved/);
+        await assert.rejects(iterations.apply(proposal.proposalId, user), /not approved/);
         const replacement = termInput({ language: targetLanguage,
           scope: { targetLanguages: [targetLanguage], tags: [], documentIds: [imported.documentId] },
           content: { term: "Nebulon", preferredTranslations: [{ language: targetLanguage, text: translations[targetLanguage] }],
             forbiddenTranslations: [], variants: [], note: "Approved replacement proposal" } });
-        const second = runWorkflowCli(api, ["proposal:create", JSON.stringify({ request: { investigationId: investigation.investigationId,
-          fetchSnapshotId: snapshot.fetchSnapshotId, operation: "create", proposedSource: replacement }, actor: user })]);
-        runWorkflowCli(api, ["proposal:decide", JSON.stringify({ proposalId: second.proposalId, expectedVersion: 0, decision: "approved", actor: user })]);
-        await runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: second.proposalId, actor: user })]);
-      } else await runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: proposal.proposalId, actor: user })]);
+        const second = proposals.create({ investigationId: investigation.investigationId,
+          fetchSnapshotId: snapshot.fetchSnapshotId, operation: "create", proposedSource: replacement }, user);
+        proposals.decide(second.proposalId, 0, "approved", user);
+        await iterations.apply(second.proposalId, user);
+      } else await iterations.apply(proposal.proposalId, user);
       assert.equal(evidence.currentStatus(emptyEvidence.evidenceId).current, false);
       const currentEvidence = evidence.capture({ workflowId, segmentId: gap.segmentId, query: "Nebulon",
         kinds: ["term"], tags: [], topK: 5 });
@@ -113,15 +110,12 @@ test("twelve documents across three formats complete the approved internet knowl
       for (const segment of bundle.segments) {
         const goodText = segment.sourceText.replaceAll("Nebulon", translations[targetLanguage]);
         if (segment.segmentId === gap.segmentId) {
-          runWorkflowCli(api, ["candidate:add", JSON.stringify({ workflowId, segmentId: segment.segmentId,
-            text: segment.sourceText, actor: { type: "fixture", id: "candidate-a" } })]);
+          fixture.workCopies.addCandidate(workflowId, segment.segmentId, segment.sourceText, { type: "fixture", id: "candidate-a" });
         }
-        const good = runWorkflowCli(api, ["candidate:add", JSON.stringify({ workflowId, segmentId: segment.segmentId,
-          text: goodText, actor: { type: "fixture", id: "candidate-b" } })]);
+        const good = fixture.workCopies.addCandidate(workflowId, segment.segmentId, goodText, { type: "fixture", id: "candidate-b" });
         if (segment.segmentId === gap.segmentId) {
           const ids = runWorkflowCli(api, ["candidate:list", JSON.stringify({ workflowId, segmentId: segment.segmentId })]).map((item) => item.candidateId);
-          const comparison = runWorkflowCli(api, ["quality:compare", JSON.stringify({ workflowId, segmentId: segment.segmentId,
-            candidateIds: ids, evidenceIds: [currentEvidence.evidenceId] })]);
+          const comparison = quality.compare(workflowId, segment.segmentId, ids, { evidenceIds: [currentEvidence.evidenceId] });
           assert.equal(comparison.members.length, 2);
         }
         const head = runWorkflowCli(api, ["candidate:select", JSON.stringify({ workflowId, segmentId: segment.segmentId,
@@ -132,9 +126,9 @@ test("twelve documents across three formats complete the approved internet knowl
       const validation = runWorkflowCli(api, ["validate", JSON.stringify({ workflowId })]);
       for (const finding of validation.findings.filter((item) => item.severity === "warning")) runWorkflowCli(api,
         ["warning:confirm", JSON.stringify({ workflowId, validationRunId: validation.validationRunId, findingId: finding.findingId, actor: user })]);
-      const qualityRun = runWorkflowCli(api, ["quality:run-working", JSON.stringify({ workflowId, evidenceIds: [currentEvidence.evidenceId] })]);
-      for (const finding of qualityRun.findings.filter((item) => item.severity === "warning")) runWorkflowCli(api,
-        ["quality:confirm-warning", JSON.stringify({ workflowId, qualityRunId: qualityRun.qualityRunId, findingId: finding.findingId, actor: user })]);
+      const qualityRun = quality.runWorking(workflowId, { evidenceIds: [currentEvidence.evidenceId] });
+      for (const finding of qualityRun.findings.filter((item) => item.severity === "warning"))
+        quality.confirmWarning(workflowId, qualityRun.qualityRunId, finding.findingId, user);
       runWorkflowCli(api, ["review", JSON.stringify({ workflowId, validationRunId: validation.validationRunId,
         qualityRunId: qualityRun.qualityRunId, expectedWorkflowVersion: 0, actor: user })]);
       runWorkflowCli(api, ["approve", JSON.stringify({ workflowId, validationRunId: validation.validationRunId,

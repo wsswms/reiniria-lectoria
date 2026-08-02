@@ -13,19 +13,16 @@ test("CLI parses commands and delegates all storage work to the workflow API", (
 });
 
 test("workflow API exposes only service operations and rejects unknown commands", () => {
-  const called = [];
   const api = new WorkflowApi({
-    imports: {}, reimports: {}, states: {}, exports: {},
-    workCopies: {
-      addCandidate(...args) { called.push(["candidate:add", ...args]); return "candidate"; },
-      listCandidates() {}, selectCandidate() {}, edit() {}, getBundle() {},
-    },
+    imports: {}, reimports: {}, flowPlans: {}, exports: {},
+    workCopies: { listCandidates() {}, selectCandidate() {}, edit() {}, getBundle() {} },
     validation: { run() {} },
     reviews: { confirmWarning() {}, humanReview() {}, approve() {} },
   });
   const payload = { workflowId: "w", segmentId: "s", text: "t", actor: { type: "user", id: "u" } };
-  assert.equal(api.execute("candidate:add", payload), "candidate");
-  assert.deepEqual(called, [["candidate:add", "w", "s", "t", payload.actor]]);
+  for (const command of ["candidate:add", "internet:create", "internet:search", "internet:fetch", "proposal:create",
+    "proposal:decide", "proposal:apply", "quality:run-working", "quality:compare"])
+    assert.throws(() => api.execute(command, payload), /unknown workflow command/, command);
   assert.throws(() => api.execute("sqlite:query", {}), /unknown workflow command/);
 });
 
@@ -34,19 +31,20 @@ test("workflow API derives workflow scope from a confirmed import", () => {
   const imported = { confirmed: true, documentId: "trusted-document", sourceRevisionId: "trusted-revision" };
   const api = new WorkflowApi({
     imports: { get(importId) { calls.push(["import:get", importId]); return imported; } },
-    states: { create(identity, content, state) { calls.push(["workflow:create", identity, content, state]); return identity; } },
+    flowPlans: { create(identity, by) { calls.push(["workflow:create", identity, by]); return identity; } },
     reimports: {}, workCopies: {}, validation: {}, reviews: {}, exports: {},
   });
   const result = api.execute("workflow:create", {
     importId: "trusted-import", workflowId: "workflow", targetLanguage: "fr",
+    actor: { type: "user", id: "owner" },
     documentId: "forged-document", sourceRevisionId: "forged-revision",
   });
   assert.deepEqual(result, {
-    workflowId: "workflow", documentId: "trusted-document", sourceRevisionId: "trusted-revision", targetLanguage: "fr",
+    workflowId: "workflow", documentId: "trusted-document", sourceRevisionId: "trusted-revision", targetLanguage: "fr", plannerEnabled: true,
   });
   assert.deepEqual(calls, [
     ["import:get", "trusted-import"],
-    ["workflow:create", result, {}, "editing"],
+    ["workflow:create", { ...result, plannerEnabled: true }, { type: "user", id: "owner" }],
   ]);
   imported.confirmed = false;
   assert.throws(() => api.execute("workflow:create", { importId: "trusted-import", workflowId: "other", targetLanguage: "de" }), /confirmed/);

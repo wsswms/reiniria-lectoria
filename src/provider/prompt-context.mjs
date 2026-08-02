@@ -29,6 +29,12 @@ function freezeManifest(value) {
     ...item,
     hits: Object.freeze(item.hits.map((hit) => Object.freeze({ ...hit }))),
   })));
+  if (value.translationContext) frozen.translationContext = Object.freeze({
+    ...value.translationContext,
+    items: Object.freeze(value.translationContext.items.map((item) => Object.freeze({
+      ...item, segmentIds: Object.freeze([...item.segmentIds]), content: Object.freeze({ ...item.content }),
+    }))),
+  });
   return Object.freeze(frozen);
 }
 
@@ -87,11 +93,30 @@ function evidenceContext(database, trustedWorkspaceId, workflow, segmentIds, evi
   return values;
 }
 
+function temporaryContext(database, trustedWorkspaceId, workflow, segmentIds, contextRevisionId) {
+  if (contextRevisionId === undefined) return undefined;
+  const row = database.prepare(`SELECT revision.context_json AS contextJson, revision.context_digest AS contextDigest
+    FROM temporary_context_revisions revision JOIN temporary_context_heads head
+      ON head.workspace_id = revision.workspace_id AND head.workflow_id = revision.workflow_id AND head.context_revision_id = revision.context_revision_id
+    JOIN context_use_decisions decision ON decision.workspace_id = revision.workspace_id AND decision.workflow_id = revision.workflow_id
+      AND decision.context_revision_id = revision.context_revision_id AND decision.decision = 'approved'
+    WHERE revision.workspace_id = ? AND revision.workflow_id = ? AND revision.context_revision_id = ? AND head.state = 'approved'`)
+    .get(trustedWorkspaceId, workflow.workflowId, contextRevisionId);
+  if (!row) throw new Error("approved current temporary context is required");
+  const value = JSON.parse(row.contextJson);
+  const canonical = stableJson(value); if (digest(canonical) !== row.contextDigest) throw new Error("temporary context integrity failed");
+  const allowed = new Set(segmentIds);
+  const items = value.items.filter((item) => item.segmentIds.length === 0 || item.segmentIds.some((segmentId) => allowed.has(segmentId)));
+  if (items.some((item) => ["disputed", "warning-only"].includes(item.instructionType) && item.affirmative !== false)) throw new Error("weak context instruction escalation rejected");
+  return { schemaVersion: value.schemaVersion, contextRevisionId, contextDigest: row.contextDigest, items };
+}
+
 export function buildContextManifest(database, trustedWorkspaceId, {
   workflowId,
   segmentIds,
   promptVersion = PROMPT_VERSION,
   evidenceIds,
+  temporaryContextRevisionId,
 } = {}) {
   if (!Array.isArray(segmentIds) || segmentIds.length === 0 || new Set(segmentIds).size !== segmentIds.length) {
     throw new TypeError("segmentIds must be a non-empty unique array");
@@ -113,6 +138,7 @@ export function buildContextManifest(database, trustedWorkspaceId, {
   `).all(trustedWorkspaceId, workflow.sourceRevisionId, ...segmentIds);
   if (rows.length !== segmentIds.length) throw new Error("segment scope mismatch");
   const evidence = evidenceContext(database, trustedWorkspaceId, workflow, segmentIds, evidenceIds);
+  const translationContext = temporaryContext(database, trustedWorkspaceId, workflow, segmentIds, temporaryContextRevisionId);
   const value = {
     schemaVersion: CONTEXT_VERSION,
     promptVersion,
@@ -137,6 +163,7 @@ export function buildContextManifest(database, trustedWorkspaceId, {
     })),
   };
   if (evidence) value.evidence = evidence;
+  if (translationContext) value.translationContext = translationContext;
   const manifest = freezeManifest(value);
   const canonical = stableJson(manifest);
   if (bytes(canonical) > MAX_CONTEXT_BYTES) throw new RangeError("context exceeds byte limit");

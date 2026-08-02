@@ -92,19 +92,19 @@ test("approved revise proposal advances the exact base revision and rejects stal
   } finally { await setup.fixture.close(); }
 });
 
-test("unified CLI exposes proposal application rebuild and search without granting non-users", async () => {
+test("legacy proposal CLI is absent while internal proposal services preserve user-only approval history", async () => {
   const setup = await internetWorkspace();
   try {
     const proposal = await approvedProposal(setup);
     const iterations = new KnowledgeIterationService(setup.fixture.root, setup.fixture.database, setup.fixture.workspaceId, {
       now: setup.fixture.clock.now, facts: setup.facts, retriever: setup.retriever, proposals: setup.proposals,
     });
-    const api = new WorkflowApi({ imports: null, reimports: null, states: null, workCopies: null, validation: null,
-      reviews: null, exports: null, proposals: setup.proposals, iterations, retriever: setup.retriever });
-    assert.throws(() => runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: proposal.proposalId,
-      actor: { type: "system", id: "automatic" } })]), /only a user/);
-    const applied = await runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: proposal.proposalId, actor: user })]);
-    const fetched = runWorkflowCli(api, ["proposal:get", JSON.stringify({ proposalId: proposal.proposalId })]);
+    const api = new WorkflowApi({ imports: null, reimports: null, flowPlans: null, workCopies: null, validation: null,
+      reviews: null, exports: null, retriever: setup.retriever });
+    assert.throws(() => runWorkflowCli(api, ["proposal:apply", JSON.stringify({ proposalId: proposal.proposalId, actor: user })]), /unknown workflow command/);
+    assert.throws(() => iterations.apply(proposal.proposalId, { type: "system", id: "automatic" }), /only a user/);
+    const applied = await iterations.apply(proposal.proposalId, user);
+    const fetched = setup.proposals.get(proposal.proposalId);
     const hits = runWorkflowCli(api, ["knowledge:search", JSON.stringify({ request: { query: "workspace", language: "zh-CN",
       kinds: ["term"], tags: [], documentIds: [setup.workflow.documentId], topK: 5 } })]);
     assert.equal(applied.application.proposalId, fetched.proposalId);

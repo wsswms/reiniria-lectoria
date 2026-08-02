@@ -34,7 +34,7 @@ test("eighteen documents complete the unified CLI and each receives an explicit 
     const reviews = new ReviewService(fixture.database, fixture.workspaceId, { now, validation: fixture.validation });
     const api = new WorkflowApi({ imports: fixture.imports,
       reimports: new ReimportService({ database: fixture.database, root: fixture.root, trustedWorkspaceId: fixture.workspaceId, now }),
-      states: fixture.states, workCopies: fixture.workCopies, validation: fixture.validation, reviews, exports });
+      flowPlans: {}, workCopies: fixture.workCopies, validation: fixture.validation, reviews, exports });
     const foundation = new ResearchFoundationService(fixture.database, fixture.workspaceId, { now });
     const decisions = ["approved", "rejected", "canceled"];
     let completed = 0;
@@ -42,7 +42,8 @@ test("eighteen documents complete the unified CLI and each receives an explicit 
       const imported = await runWorkflowCli(api, ["document:import", JSON.stringify(source)]);
       runWorkflowCli(api, ["document:confirm", JSON.stringify({ importId: imported.importId, actor: user })]);
       const workflowId = randomUUID();
-      runWorkflowCli(api, ["workflow:create", JSON.stringify({ importId: imported.importId, workflowId, targetLanguage: source.targetLanguage })]);
+      fixture.states.create({ workflowId, documentId: imported.documentId, sourceRevisionId: imported.sourceRevisionId,
+        targetLanguage: source.targetLanguage }, {}, "editing");
       const bundle = runWorkflowCli(api, ["working-copy:get", JSON.stringify({ workflowId })]);
       const segmentIds = [bundle.segments[0].segmentId];
       const task = orchestrator(fixture).enqueue(enqueueInput({ workflowId, documentId: imported.documentId,
@@ -54,8 +55,8 @@ test("eighteen documents complete the unified CLI and each receives an explicit 
       foundation.createRequest(request, user); foundation.submitRequest(request.requestId, 0, user);
       const decision = decisions[index % decisions.length]; foundation.decideRequest(request.requestId, 1, decision, user);
       for (const segment of bundle.segments) {
-        const candidate = runWorkflowCli(api, ["candidate:add", JSON.stringify({ workflowId, segmentId: segment.segmentId,
-          text: segment.sourceText, actor: { type: "fixture", id: "m5r-5-candidate" } })]);
+        const candidate = fixture.workCopies.addCandidate(workflowId, segment.segmentId, segment.sourceText,
+          { type: "fixture", id: "m5r-5-candidate" });
         runWorkflowCli(api, ["candidate:select", JSON.stringify({ workflowId, segmentId: segment.segmentId,
           candidateId: candidate.candidateId, expectedHeadVersion: null, actor: user })]);
       }

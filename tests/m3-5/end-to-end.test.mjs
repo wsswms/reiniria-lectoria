@@ -13,6 +13,7 @@ import { ReviewService } from "../../src/translation/review-service.mjs";
 import { ValidationService } from "../../src/translation/validator.mjs";
 import { WorkCopyService } from "../../src/translation/work-copy-service.mjs";
 import { WorkspaceManager } from "../../src/workspace/manager.mjs";
+import { FlowPlanService } from "../../src/m5c/flow-plan-service.mjs";
 import { validFixtures } from "../fixtures/m3-2/corpus.mjs";
 import { createEditableWorkflow, seedWorkingCopies, workspace } from "../m3-4/helpers.mjs";
 import { createExportable } from "./helpers.mjs";
@@ -26,7 +27,7 @@ function translatedText(segment) {
     : part.replace(/\p{L}/gu, "x")).join("");
 }
 
-test("the local CLI entry completes markdown, HTML and text workflows through one application API", async () => {
+test("the application CLI creates only an M5C planning flow with a mandatory local ContextPlan", async () => {
   const fixture = await workspace("lectoria-m3-5-cli-e2e-");
   try {
     const exports = new ExportService({
@@ -36,58 +37,21 @@ test("the local CLI entry completes markdown, HTML and text workflows through on
     const api = new WorkflowApi({
       imports: fixture.imports,
       reimports: new ReimportService({ database: fixture.database, root: fixture.root, trustedWorkspaceId: fixture.workspaceId, now: () => new Date(0) }),
-      states: fixture.states,
+      flowPlans: new FlowPlanService(fixture.database, fixture.workspaceId, { now: () => new Date(0) }),
       workCopies: fixture.workCopies,
       validation: fixture.validation,
       reviews: fixture.reviews,
       exports,
     });
-    const sources = [
-      { format: "markdown", title: "CLI Markdown", content: "# Guide\n\nRead [manual](https://example.com/manual)." },
-      { format: "html", title: "CLI HTML", content: "<article><h1>Guide</h1><p>Read <a href=\"https://example.com/manual\">manual</a>.</p></article>" },
-      { format: "text", title: "CLI Text", content: "First paragraph.\n\nSecond paragraph." },
-    ];
-    for (const source of sources) {
-      const imported = await runWorkflowCli(api, ["document:import", JSON.stringify(source)]);
-      runWorkflowCli(api, ["document:confirm", JSON.stringify({ importId: imported.importId, actor: { type: "user", id: "owner" } })]);
-      const workflowId = crypto.randomUUID();
-      runWorkflowCli(api, ["workflow:create", JSON.stringify({ importId: imported.importId, workflowId, targetLanguage: "fr" })]);
-      const bundle = runWorkflowCli(api, ["working-copy:get", JSON.stringify({ workflowId })]);
-      for (const segment of bundle.segments) {
-        const candidateText = translatedText(segment);
-        const candidate = runWorkflowCli(api, ["candidate:add", JSON.stringify({
-          workflowId, segmentId: segment.segmentId, text: candidateText, actor: { type: "user", id: "writer" },
-        })]);
-        const selected = runWorkflowCli(api, ["candidate:select", JSON.stringify({
-          workflowId, segmentId: segment.segmentId, candidateId: candidate.candidateId,
-          expectedHeadVersion: null, actor: { type: "user", id: "writer" },
-        })]);
-        runWorkflowCli(api, ["working-copy:edit", JSON.stringify({
-          workflowId, segmentId: segment.segmentId, expectedHeadVersion: selected.version,
-          text: candidateText.replace("x", "y"), actor: { type: "user", id: "writer" },
-        })]);
-      }
-      const run = runWorkflowCli(api, ["validate", JSON.stringify({ workflowId })]);
-      for (const warning of run.findings.filter((item) => item.severity === "warning")) {
-        runWorkflowCli(api, ["warning:confirm", JSON.stringify({
-          workflowId, validationRunId: run.validationRunId, findingId: warning.findingId,
-          actor: { type: "user", id: "reviewer" },
-        })]);
-      }
-      runWorkflowCli(api, ["review", JSON.stringify({
-        workflowId, validationRunId: run.validationRunId, expectedWorkflowVersion: 0,
-        actor: { type: "user", id: "reviewer" },
-      })]);
-      runWorkflowCli(api, ["approve", JSON.stringify({
-        workflowId, validationRunId: run.validationRunId, expectedWorkflowVersion: 1,
-        actor: { type: "user", id: "approver" },
-      })]);
-      const ordinary = await runWorkflowCli(api, ["export", JSON.stringify({ workflowId, validationRunId: run.validationRunId, format: source.format })]);
-      const canonical = await runWorkflowCli(api, ["export", JSON.stringify({ workflowId, validationRunId: run.validationRunId, format: "canonical" })]);
-      assert.equal(ordinary.manifest.artifact_format, source.format);
-      assert.equal(canonical.manifest.artifact_format, "canonical");
-      assert.equal(runWorkflowCli(api, ["workflow:get", JSON.stringify({ workflowId })]).state, "exported");
-    }
+    const source = { format: "text", title: "CLI M5C", content: "Nikon 3枚 lens is not 2组." };
+    const imported = await runWorkflowCli(api, ["document:import", JSON.stringify(source)]);
+    runWorkflowCli(api, ["document:confirm", JSON.stringify({ importId: imported.importId, actor: { type: "user", id: "owner" } })]);
+    const workflowId = crypto.randomUUID();
+    const created = runWorkflowCli(api, ["workflow:create", JSON.stringify({ importId: imported.importId, workflowId, targetLanguage: "fr", actor: { type: "user", id: "owner" } })]);
+    assert.equal(created.flow.flowState, "planning");
+    assert.equal(created.plan.plannerMode, "local");
+    assert.ok(created.plan.items.some((item) => item.kind === "measurement"));
+    assert.throws(() => runWorkflowCli(api, ["review", JSON.stringify({ workflowId, validationRunId: "missing", expectedWorkflowVersion: 0, actor: { type: "user", id: "reviewer" } })]), /validation run not found/);
   } finally { await fixture.close(); }
 });
 
