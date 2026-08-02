@@ -51,6 +51,8 @@
     "exercise:real-article-pilot": "node scripts/run-real-article-pilot.mjs",
     "smoke:real-article-translation": "node scripts/smoke-real-article-translation.mjs",
     "exercise:real-article-translation": "node scripts/run-real-article-translation.mjs",
+    "exercise:knowledge-translation-comparison": "node scripts/run-knowledge-translation-comparison.mjs",
+    "exercise:collect-comparison-evidence": "node scripts/collect-comparison-research-evidence.mjs",
     "exercise:deepseek-thinking-comparison": "node scripts/run-deepseek-thinking-comparison.mjs"
   },
   "dependencies": {

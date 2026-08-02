@@ -26,6 +26,9 @@ import { TranslationExecutor } from "../provider/translation-executor.mjs";
 import { TranslationTaskOrchestrator } from "../provider/task-orchestrator.mjs";
 import { ValidationService } from "../translation/validator.mjs";
 import { WorkCopyService } from "../translation/work-copy-service.mjs";
+import { KnowledgeFactService } from "../knowledge/fact-service.mjs";
+import { FtsRetriever } from "../knowledge/fts-retriever.mjs";
+import { EvidenceService } from "../knowledge/evidence-service.mjs";
 import { BrokeredDeepSeekResearchAdapter } from "./brokered-research-adapter.mjs";
 import { createPinnedHttpsTransport, createRobotsPolicy } from "./restricted-https-transport.mjs";
 
@@ -34,6 +37,35 @@ const USER = Object.freeze({ type: "user", id: "real-article-pilot-owner" });
 const SYSTEM = Object.freeze({ type: "system", id: "real-article-pilot-control-plane" });
 const MODEL = Object.freeze({ type: "model", id: "real-article-pilot-gap-detector" });
 const zero = Object.freeze({ maxSearchCalls: 0, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0 });
+
+function comparisonProfile(input, segmentCount) {
+  if (input === undefined) return null;
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).some((key) => !["label", "facts", "segmentQueries", "topK"].includes(key))) {
+    throw new TypeError("knowledge profile is invalid");
+  }
+  if (typeof input.label !== "string" || input.label.length < 1 || input.label.length > 128
+    || !Array.isArray(input.facts) || input.facts.length < 1 || input.facts.length > 64
+    || !Array.isArray(input.segmentQueries) || input.segmentQueries.length !== segmentCount
+    || !Number.isInteger(input.topK) || input.topK < 1 || input.topK > 20) {
+    throw new TypeError("knowledge profile is invalid");
+  }
+  for (const fact of input.facts) {
+    if (!fact || typeof fact !== "object" || Array.isArray(fact)
+      || Object.keys(fact).some((key) => !["kind", "language", "tags", "content"].includes(key))
+      || !["term", "knowledge", "style"].includes(fact.kind) || typeof fact.language !== "string"
+      || !Array.isArray(fact.tags) || !fact.content || typeof fact.content !== "object") {
+      throw new TypeError("knowledge profile fact is invalid");
+    }
+  }
+  for (const queries of input.segmentQueries) {
+    if (!Array.isArray(queries) || queries.length > 8 || queries.some((query) => typeof query !== "string"
+      || [...query].length < 1 || [...query].length > 512) || new Set(queries).size !== queries.length) {
+      throw new TypeError("knowledge profile queries are invalid");
+    }
+  }
+  return input;
+}
 
 function proposalSource(item, documentId, targetLanguage) {
   const common = { schemaVersion: "1.0", factId: randomUUID(), revisionId: randomUUID(), language: item.sourceLanguage,
@@ -44,9 +76,17 @@ function proposalSource(item, documentId, targetLanguage) {
     tags: ["camera", "lens", "real-article-pilot"], source: "internet-research-draft" } };
 }
 
-export async function createLivePilotOperations(config, { runnerIdentity = { uid: 65532, gid: 65532 }, now = () => new Date() } = {}) {
+export async function createLivePilotOperations(config, {
+  runnerIdentity = { uid: 65532, gid: 65532 },
+  now = () => new Date(),
+  knowledgeProfile,
+  invokeTranslationProvider,
+  onTranslationRequest,
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "lectoria-real-article-pilot-"));
-  for (const directory of ["private/objects", "private/ledger", "derived", "staging"]) await mkdir(join(root, directory), { recursive: true });
+  for (const directory of ["private/objects", "private/ledger", "derived", "staging", "dictionary", "style", "knowledge"]) {
+    await mkdir(join(root, directory), { recursive: true });
+  }
   const workspaceId = randomUUID();
   const database = openWorkspaceDatabase(join(root, "app.sqlite3"), { workspaceId, now });
   const state = {};
@@ -63,6 +103,27 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
       FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? ORDER BY ordinal`).all(workspaceId, imported.sourceRevisionId);
     const translatable = segments.filter((item) => item.translatable === 1);
     if (translatable.length !== sourceParagraphs.length) throw new Error("import segmentation differs from the approved article manifest");
+    const profile = comparisonProfile(knowledgeProfile, translatable.length);
+    let evidenceService;
+    const evidenceIdsBySegment = new Map();
+    if (profile) {
+      const facts = new KnowledgeFactService(root, database, workspaceId, { now });
+      for (const item of profile.facts) {
+        await facts.create({ schemaVersion: "1.0", factId: randomUUID(), revisionId: randomUUID(), kind: item.kind,
+          language: item.language, scope: { targetLanguages: [targetLanguage], tags: item.tags,
+            documentIds: [imported.documentId] }, content: item.content }, USER);
+      }
+      const retriever = new FtsRetriever(root, database, workspaceId, { now });
+      await retriever.rebuild();
+      evidenceService = new EvidenceService(database, workspaceId, retriever, { now,
+        policyVersion: `real-article-comparison-${profile.label}` });
+      for (const [index, segment] of translatable.entries()) {
+        const snapshots = profile.segmentQueries[index].map((query) => evidenceService.capture({ workflowId,
+          segmentId: segment.segmentId, query, kinds: ["term", "knowledge", "style"], tags: [], topK: profile.topK }));
+        if (snapshots.some((snapshot) => snapshot.hits.length === 0)) throw new Error("knowledge profile query returned no evidence");
+        if (snapshots.length > 0) evidenceIdsBySegment.set(segment.segmentId, snapshots.map((snapshot) => snapshot.evidenceId));
+      }
+    }
     const tasks = new TranslationTaskOrchestrator(database, workspaceId, { now });
     const budgets = new PricingBudgetService(database, workspaceId, { now });
     budgets.addPricing({ providerId: "deepseek", modelId: config.deepseek.modelId, pricingVersion: config.deepseek.pricing.version, currency: "USD",
@@ -70,18 +131,37 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
     const policyVersion = `real-article-pilot-${config.article.digest.slice(-16)}`;
     budgets.addPolicy({ policyVersion, currency: "USD", softLimitMicros: config.deepseek.translation.hardLimitMicros,
       hardLimitMicros: config.deepseek.translation.hardLimitMicros, unknownPriceAction: "block" });
-    const contextDigests = Object.fromEntries(translatable.map((segment) => [segment.segmentId, buildContextManifest(database, workspaceId,
-      { workflowId, segmentIds: [segment.segmentId], promptVersion: "lectoria-translation-v1" }).contextDigest]));
+    const promptVersion = profile ? "lectoria-translation-v2" : "lectoria-translation-v1";
+    const contextDigests = Object.fromEntries(translatable.map((segment) => {
+      const evidenceIds = evidenceIdsBySegment.get(segment.segmentId);
+      return [segment.segmentId, buildContextManifest(database, workspaceId,
+        { workflowId, segmentIds: [segment.segmentId], promptVersion,
+          ...(evidenceIds?.length ? { evidenceIds } : {}) }).contextDigest];
+    }));
     const queued = tasks.enqueue({ workflowId, documentId: imported.documentId, sourceRevisionId: imported.sourceRevisionId, targetLanguage,
       segmentIds: translatable.map((item) => item.segmentId), idempotencyKey: `real-article:${config.article.digest}`,
       requestDigest: sha(JSON.stringify(contextDigests)), policyVersion, providerId: "deepseek", modelId: config.deepseek.modelId,
-      promptVersion: "lectoria-translation-v1", contextDigests, maxAttempts: 1, batchSize: 1 });
+      promptVersion, contextDigests, maxAttempts: 1, batchSize: 1 });
+    if (evidenceService) {
+      for (const attempt of queued.attempts) {
+        const evidenceIds = evidenceIdsBySegment.get(attempt.segment_id);
+        if (evidenceIds?.length) evidenceService.bindAttempt(attempt.attempt_id, evidenceIds);
+      }
+    }
     budgets.assignTask(queued.task.task_id, policyVersion);
     let calls = 0;
     const capabilityAuthority = new CapabilityAuthority(randomBytes(32));
     const invokeProvider = async (request, options) => {
       if (calls >= config.deepseek.translation.maxCalls) throw Object.assign(new Error("translation call limit reached"), { category: "budget" });
       calls += 1;
+      if (onTranslationRequest !== undefined) {
+        if (typeof onTranslationRequest !== "function") throw new TypeError("onTranslationRequest is invalid");
+        await onTranslationRequest(request);
+      }
+      if (invokeTranslationProvider !== undefined) {
+        if (typeof invokeTranslationProvider !== "function") throw new TypeError("invokeTranslationProvider is invalid");
+        return invokeTranslationProvider(request, options);
+      }
       const credential = await openCredentialFile(config.deepseek.credentialPath);
       try { return await invokeProviderThroughRunner({ request, capabilityAuthority, runnerIdentity, signal: options.signal,
         invokeProvider: (brokerRequest, { credentialRef }) => invokeBrokerProcess({ request: brokerRequest, credentialRef, credentialFd: credential.fd }, { timeoutMs: 60_000 }),
@@ -89,7 +169,7 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
     };
     const executor = new TranslationExecutor(database, workspaceId, { invokeProvider, credentialRef: "external-file:deepseek/translation-pilot",
       pricingVersion: config.deepseek.pricing.version, estimatedOutputTokens: config.deepseek.translation.maxOutputTokens,
-      orchestrator: tasks, budgets, now, workerId: "real-article-pilot" });
+      orchestrator: tasks, budgets, evidenceService, now, workerId: "real-article-pilot" });
     for (let index = 0; index < translatable.length; index += 1) {
       const result = await executor.executeNext();
       if (result.status !== "completed") throw Object.assign(new Error("translation attempt failed"), { category: result.error?.category ?? result.status });
@@ -107,6 +187,10 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
       coalesce(sum(output_tokens),0) AS outputTokens, coalesce(sum(amount_micros),0) AS costMicrosUsd
       FROM usage_cost_records WHERE workspace_id = ?`).get(workspaceId);
     state.scope = { imported, workflowId, taskId: queued.task.task_id, segments: translatable, bundle };
+    state.translationDiagnostics = Object.freeze({ profile: profile?.label ?? null,
+      facts: profile?.facts.length ?? 0,
+      evidenceSnapshots: [...evidenceIdsBySegment.values()].reduce((total, ids) => total + ids.length, 0),
+      evidenceBoundSegments: evidenceIdsBySegment.size });
     return { segments: bundle.segments.map((item) => ({ segmentId: item.segmentId, sourceText: item.sourceText, targetText: item.text })),
       usage, validation: { errors: 0, warnings: validation.findings.filter((item) => item.severity === "warning").length } };
   }
@@ -214,5 +298,7 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
       usage: { ...budgets.totals(grant.grantId), modelCalls: 1 } };
   }
 
-  return Object.freeze({ translate, investigate, async close() { database.close(); await rm(root, { recursive: true, force: true }); } });
+  return Object.freeze({ translate, investigate,
+    diagnostics() { return state.translationDiagnostics ?? null; },
+    async close() { database.close(); await rm(root, { recursive: true, force: true }); } });
 }

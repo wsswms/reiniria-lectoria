@@ -59,7 +59,7 @@ export function realArticlePilotConfigContract(input, { allowLive = false } = {}
   if (brave.maxCalls * brave.costMicrosPerCall > brave.hardLimitMicros) throw new TypeError("brave budget exceeds hard limit");
 
   exact(input.fetch, ["maxUrls", "timeoutMs", "maxConcurrency", "maxBodyBytes"], "fetch");
-  const fetch = Object.freeze({ maxUrls: integer(input.fetch.maxUrls, "fetch.maxUrls", 1, 20), timeoutMs: integer(input.fetch.timeoutMs, "fetch.timeoutMs", 1, 30_000),
+  const fetch = Object.freeze({ maxUrls: integer(input.fetch.maxUrls, "fetch.maxUrls", 1, 50), timeoutMs: integer(input.fetch.timeoutMs, "fetch.timeoutMs", 1, 30_000),
     maxConcurrency: integer(input.fetch.maxConcurrency, "fetch.maxConcurrency", 1, 4), maxBodyBytes: integer(input.fetch.maxBodyBytes, "fetch.maxBodyBytes", 1, 1_048_576) });
   if (fetch.maxBodyBytes !== 1_048_576) throw new TypeError("fetch.maxBodyBytes must remain fixed");
 
@@ -80,4 +80,4 @@ export function realArticlePilotConfigContract(input, { allowLive = false } = {}
     output: Object.freeze({ directory: absolute(input.output.directory, "output.directory") }), totalHardLimitMicros });
 }
 
-export const REAL_ARTICLE_PILOT_LIMITS = Object.freeze({ translationCalls: 20, researchCalls: 10, braveCalls: 100, fetchUrls: 20, totalMicrosUsd: 1_000_000 });
+export const REAL_ARTICLE_PILOT_LIMITS = Object.freeze({ translationCalls: 20, researchCalls: 10, braveCalls: 100, fetchUrls: 50, totalMicrosUsd: 1_000_000 });

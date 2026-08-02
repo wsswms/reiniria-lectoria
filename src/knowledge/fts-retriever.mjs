@@ -33,7 +33,10 @@ function indexDocument(row) {
     const translations = [...content.preferredTranslations, ...content.forbiddenTranslations].map((item) => item.text);
     return {
       title: content.term,
-      body: [content.note ?? "", ...translations].join("\n"),
+      body: [content.note ?? "",
+        ...content.preferredTranslations.map((item) => `preferredTranslation[${item.language}]: ${item.text}`),
+        ...content.forbiddenTranslations.map((item) => `forbiddenTranslation[${item.language}]: ${item.text}`),
+      ].join("\n"),
       terms: [content.term, ...content.variants, ...translations].join("\n"),
       exact: [content.term, ...content.variants, ...translations],
       tags: scope.tags,
