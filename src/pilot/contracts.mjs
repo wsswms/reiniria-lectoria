@@ -46,7 +46,7 @@ export function realArticlePilotConfigContract(input, { allowLive = false } = {}
     outputMicrosPerMillion: integer(input.deepseek.pricing.outputMicrosPerMillion, "deepseek.pricing.outputMicrosPerMillion", 0, 10_000_000),
     cachedInputMicrosPerMillion: integer(input.deepseek.pricing.cachedInputMicrosPerMillion, "deepseek.pricing.cachedInputMicrosPerMillion", 0, 10_000_000) });
   const deepseek = Object.freeze({ modelId: input.deepseek.modelId, credentialPath: absolute(input.deepseek.credentialPath, "deepseek.credentialPath"),
-    origin: DEEPSEEK_ORIGIN, pricing, translation: budget(input.deepseek.translation, "deepseek.translation", 20, 1_024),
+    origin: DEEPSEEK_ORIGIN, pricing, translation: budget(input.deepseek.translation, "deepseek.translation", 128, 1_024),
     research: budget(input.deepseek.research, "deepseek.research", 10,
       input.deepseek.modelId === "deepseek-v4-flash" ? 384_000 : 2_048, { thinking: true }) });
 
@@ -80,4 +80,4 @@ export function realArticlePilotConfigContract(input, { allowLive = false } = {}
     output: Object.freeze({ directory: absolute(input.output.directory, "output.directory") }), totalHardLimitMicros });
 }
 
-export const REAL_ARTICLE_PILOT_LIMITS = Object.freeze({ translationCalls: 20, researchCalls: 10, braveCalls: 100, fetchUrls: 50, totalMicrosUsd: 1_000_000 });
+export const REAL_ARTICLE_PILOT_LIMITS = Object.freeze({ translationCalls: 128, researchCalls: 10, braveCalls: 100, fetchUrls: 50, totalMicrosUsd: 1_000_000 });

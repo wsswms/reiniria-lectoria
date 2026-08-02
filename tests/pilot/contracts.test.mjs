@@ -42,3 +42,11 @@ test("live mode, origin drift, excess budgets, unknown keys and non-absolute pat
   assert.throws(() => realArticlePilotConfigContract({ ...config(), extra: true }), /unknown/);
   assert.throws(() => realArticlePilotConfigContract({ ...config(), article: { ...config().article, path: "article.txt" } }), /absolute/);
 });
+
+test("long-form translation permits up to 128 calls while failing closed above the safety ceiling", () => {
+  const longForm = { ...config(), deepseek: { ...config().deepseek,
+    translation: { ...config().deepseek.translation, maxCalls: 128 } } };
+  assert.equal(realArticlePilotConfigContract(longForm).deepseek.translation.maxCalls, 128);
+  assert.throws(() => realArticlePilotConfigContract({ ...longForm, deepseek: { ...longForm.deepseek,
+    translation: { ...longForm.deepseek.translation, maxCalls: 129 } } }), /deepseek.translation.maxCalls/);
+});

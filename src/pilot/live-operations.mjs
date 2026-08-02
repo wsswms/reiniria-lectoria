@@ -41,12 +41,13 @@ const zero = Object.freeze({ maxSearchCalls: 0, maxContentUrls: 0, maxModelToken
 function comparisonProfile(input, segmentCount) {
   if (input === undefined) return null;
   if (!input || typeof input !== "object" || Array.isArray(input)
-    || Object.keys(input).some((key) => !["label", "facts", "segmentQueries", "topK"].includes(key))) {
+    || Object.keys(input).some((key) => !["label", "facts", "segmentQueries", "sharedQueries", "topK"].includes(key))) {
     throw new TypeError("knowledge profile is invalid");
   }
+  const automatic = input.segmentQueries === "auto";
   if (typeof input.label !== "string" || input.label.length < 1 || input.label.length > 128
     || !Array.isArray(input.facts) || input.facts.length < 1 || input.facts.length > 64
-    || !Array.isArray(input.segmentQueries) || input.segmentQueries.length !== segmentCount
+    || (!automatic && (!Array.isArray(input.segmentQueries) || input.segmentQueries.length !== segmentCount))
     || !Number.isInteger(input.topK) || input.topK < 1 || input.topK > 20) {
     throw new TypeError("knowledge profile is invalid");
   }
@@ -58,13 +59,27 @@ function comparisonProfile(input, segmentCount) {
       throw new TypeError("knowledge profile fact is invalid");
     }
   }
-  for (const queries of input.segmentQueries) {
+  const sharedQueries = input.sharedQueries ?? [];
+  if (!Array.isArray(sharedQueries) || sharedQueries.length > 8 || sharedQueries.some((query) => typeof query !== "string"
+    || [...query].length < 1 || [...query].length > 512) || new Set(sharedQueries).size !== sharedQueries.length
+    || (!automatic && sharedQueries.length > 0)) throw new TypeError("knowledge profile queries are invalid");
+  for (const queries of automatic ? [] : input.segmentQueries) {
     if (!Array.isArray(queries) || queries.length > 8 || queries.some((query) => typeof query !== "string"
       || [...query].length < 1 || [...query].length > 512) || new Set(queries).size !== queries.length) {
       throw new TypeError("knowledge profile queries are invalid");
     }
   }
-  return input;
+  return Object.freeze({ ...input, sharedQueries: Object.freeze(sharedQueries), automatic });
+}
+
+function segmentEvidenceQueries(profile, sourceText) {
+  if (!profile.automatic) return profile.segmentQueries;
+  const terms = profile.facts.filter((fact) => fact.kind === "term")
+    .filter((fact) => [fact.content.term, ...(fact.content.variants ?? [])]
+      .some((term) => typeof term === "string" && term.length > 0 && sourceText.includes(term)))
+    .map((fact) => `${[...fact.content.term].length >= 3
+      ? fact.content.term : fact.content.preferredTranslations[0]?.text ?? fact.content.term} preferredTranslation`);
+  return [...new Set([...profile.sharedQueries, ...terms])].slice(0, 8);
 }
 
 function proposalSource(item, documentId, targetLanguage) {
@@ -82,6 +97,7 @@ export async function createLivePilotOperations(config, {
   knowledgeProfile,
   invokeTranslationProvider,
   onTranslationRequest,
+  onTranslationResponse,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "lectoria-real-article-pilot-"));
   for (const directory of ["private/objects", "private/ledger", "derived", "staging", "dictionary", "style", "knowledge"]) {
@@ -118,9 +134,11 @@ export async function createLivePilotOperations(config, {
       evidenceService = new EvidenceService(database, workspaceId, retriever, { now,
         policyVersion: `real-article-comparison-${profile.label}` });
       for (const [index, segment] of translatable.entries()) {
-        const snapshots = profile.segmentQueries[index].map((query) => evidenceService.capture({ workflowId,
+        const queries = profile.automatic ? segmentEvidenceQueries(profile, segment.sourceText) : profile.segmentQueries[index];
+        const snapshots = queries.map((query) => evidenceService.capture({ workflowId,
           segmentId: segment.segmentId, query, kinds: ["term", "knowledge", "style"], tags: [], topK: profile.topK }));
-        if (snapshots.some((snapshot) => snapshot.hits.length === 0)) throw new Error("knowledge profile query returned no evidence");
+        const emptyIndex = snapshots.findIndex((snapshot) => snapshot.hits.length === 0);
+        if (emptyIndex >= 0) throw new Error(`knowledge profile query returned no evidence at segment ${index + 1}, query ${emptyIndex + 1}`);
         if (snapshots.length > 0) evidenceIdsBySegment.set(segment.segmentId, snapshots.map((snapshot) => snapshot.evidenceId));
       }
     }
@@ -158,21 +176,35 @@ export async function createLivePilotOperations(config, {
         if (typeof onTranslationRequest !== "function") throw new TypeError("onTranslationRequest is invalid");
         await onTranslationRequest(request);
       }
+      let response;
       if (invokeTranslationProvider !== undefined) {
         if (typeof invokeTranslationProvider !== "function") throw new TypeError("invokeTranslationProvider is invalid");
-        return invokeTranslationProvider(request, options);
+        response = await invokeTranslationProvider(request, options);
+      } else {
+        const credential = await openCredentialFile(config.deepseek.credentialPath);
+        try { response = await invokeProviderThroughRunner({ request, capabilityAuthority, runnerIdentity, signal: options.signal,
+          invokeProvider: (brokerRequest, { credentialRef }) => invokeBrokerProcess({ request: brokerRequest, credentialRef, credentialFd: credential.fd }, { timeoutMs: 60_000 }),
+          providerOptions: options }); } finally { await credential.close(); }
       }
-      const credential = await openCredentialFile(config.deepseek.credentialPath);
-      try { return await invokeProviderThroughRunner({ request, capabilityAuthority, runnerIdentity, signal: options.signal,
-        invokeProvider: (brokerRequest, { credentialRef }) => invokeBrokerProcess({ request: brokerRequest, credentialRef, credentialFd: credential.fd }, { timeoutMs: 60_000 }),
-        providerOptions: options }); } finally { await credential.close(); }
+      if (onTranslationResponse !== undefined) {
+        if (typeof onTranslationResponse !== "function") throw new TypeError("onTranslationResponse is invalid");
+        try { await onTranslationResponse(request, response); } catch {
+          throw Object.assign(new Error("translation response recording failed"), {
+            category: "unknown-outcome", retryable: false,
+          });
+        }
+      }
+      return response;
     };
     const executor = new TranslationExecutor(database, workspaceId, { invokeProvider, credentialRef: "external-file:deepseek/translation-pilot",
       pricingVersion: config.deepseek.pricing.version, estimatedOutputTokens: config.deepseek.translation.maxOutputTokens,
       orchestrator: tasks, budgets, evidenceService, now, workerId: "real-article-pilot" });
     for (let index = 0; index < translatable.length; index += 1) {
       const result = await executor.executeNext();
-      if (result.status !== "completed") throw Object.assign(new Error("translation attempt failed"), { category: result.error?.category ?? result.status });
+      if (result.status !== "completed") throw Object.assign(new Error("translation attempt failed"), {
+        category: result.error?.category ?? result.status,
+        ...(result.error?.providerCode === undefined ? {} : { providerCode: result.error.providerCode }),
+      });
     }
     if ((await executor.executeNext()).status !== "idle") throw new Error("translation attempts did not settle");
     const workCopies = new WorkCopyService(database, workspaceId, { now });

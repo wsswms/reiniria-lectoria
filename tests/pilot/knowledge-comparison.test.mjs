@@ -100,3 +100,39 @@ test("comparison profiles fail closed on missing retrieval evidence", async () =
     await assert.rejects(operations.translate({ sourceParagraphs: ["一。", "二。"], targetLanguage: "zh-CN" }), /no evidence/);
   } finally { await operations.close(); }
 });
+
+test("automatic profiles bind only shared context and terms present in each segment", async () => {
+  const requests = [];
+  const operations = await createLivePilotOperations({ ...config, deepseek: { ...config.deepseek,
+    translation: { ...config.deepseek.translation, maxCalls: 25 } } }, {
+    knowledgeProfile: { label: "automatic", facts: [termFact, documentFact], segmentQueries: "auto",
+      sharedQueries: ["文書全体の翻訳方針 Vest"], topK: 8 },
+    invokeTranslationProvider: async (request) => fakeResponse(request),
+    onTranslationRequest: async (request) => requests.push(request),
+  });
+  try {
+    const sourceParagraphs = Array.from({ length: 25 }, (_, index) => index === 12 ? "ベス単を使う。" : `段落${index + 1}。`);
+    const result = await operations.translate({ sourceParagraphs, targetLanguage: "zh-CN" });
+    assert.equal(result.segments.length, 25);
+    assert.equal(result.usage.calls, 25);
+    assert.ok(requests.every((request) => request.evidence.length >= 1 && request.evidence.length <= 8));
+    const requestsBySource = new Map(requests.map((request) => [request.segments[0].sourceText, request]));
+    assert.equal(requestsBySource.get("段落1。").evidence.length, 1);
+    assert.equal(requestsBySource.get("ベス単を使う。").evidence.length, 2);
+    assert.ok(requestsBySource.get("ベス単を使う。").evidence.flatMap((snapshot) => snapshot.hits)
+      .some((hit) => /preferredTranslation\[zh-CN\]/.test(hit.snippet)));
+    assert.deepEqual(operations.diagnostics(), { profile: "automatic", facts: 2,
+      evidenceSnapshots: 26, evidenceBoundSegments: 25 });
+  } finally { await operations.close(); }
+});
+
+test("response trace failures become conservative unknown outcomes after a provider call", async () => {
+  const operations = await createLivePilotOperations(config, {
+    invokeTranslationProvider: async (request) => fakeResponse(request),
+    onTranslationResponse: async () => { throw new Error("private trace write failed"); },
+  });
+  try {
+    await assert.rejects(operations.translate({ sourceParagraphs: ["一。"], targetLanguage: "zh-CN" }),
+      (error) => error.category === "unknown-outcome" && !error.message.includes("private trace"));
+  } finally { await operations.close(); }
+});
