@@ -112,6 +112,12 @@ export class TranslationFlowBudgetService {
       const terminal = rows.find((row) => row.entry_type !== "reserved");
       if (terminal) {
         if (terminal.entry_type !== entryType) throw new FlowBudgetConflictError("reservation already finalized differently");
+        const expected = actualInput === null ? (entryType === "released" ? zero() : budgetUsageContract(JSON.parse(rows[0].usage_json).requested))
+          : budgetUsageContract(actualInput);
+        if (keys.some((key) => terminal[key.replace(/[A-Z]/gu, (match) => `_${match.toLowerCase()}`)] !== expected[key])) {
+          throw new FlowBudgetConflictError("terminal budget idempotency conflict");
+        }
+        if (entryType === "unknown") this.#pauseUnknown(workflowId, rows[0].category, details, timestamp);
         return Object.freeze({ decision: entryType, reservationId, reused: true });
       }
       const requested = budgetUsageContract(JSON.parse(rows[0].usage_json).requested);
@@ -124,8 +130,19 @@ export class TranslationFlowBudgetService {
         .run(this.workspaceId, this.id(), workflowId, rows[0].policy_revision_id, reservationId, rows[0].category, entryType,
           actual.calls, actual.inputTokens, actual.outputTokens, actual.costMicrosCny, actual.costMicrosUsd, actual.durationMs,
           stableJson({ requested, actual, details }), timestamp);
+      if (entryType === "unknown") this.#pauseUnknown(workflowId, rows[0].category, details, timestamp);
       return Object.freeze({ decision: entryType, reservationId, reused: false, usage: Object.freeze(actual) });
     }).immediate();
+  }
+
+  #pauseUnknown(workflowId, category, details, timestamp) {
+    const pauseReason = details?.pauseReason ?? `${category}-unknown-outcome`;
+    if (typeof pauseReason !== "string" || !/^[a-z][a-z0-9-]{0,127}$/u.test(pauseReason)) throw new FlowBudgetConflictError("unknown outcome pause reason is invalid");
+    this.database.prepare(`UPDATE translation_flow_controls
+      SET flow_state = 'paused', outcome_state = 'unknown', pause_reason = ?, version = version + 1, updated_at = ?
+      WHERE workspace_id = ? AND workflow_id = ?
+        AND NOT (flow_state = 'paused' AND outcome_state = 'unknown' AND pause_reason = ?)`)
+      .run(pauseReason, timestamp, this.workspaceId, workflowId, pauseReason);
   }
 
   #snapshot(workflowId, excludeReservationId = null) {

@@ -66,9 +66,15 @@ try {
           limits: { maxRounds: 1, maxSearchCalls: 1, maxResultsPerSearch: 3, maxContentUrls: 1, maxDurationSeconds: 60,
             maxRuns: 1, maxModelTokens: 0, maxCostMicrosUsd: 5_000 }, allowedDomains: ["iana.org"], allowedLanguages: ["en", "ja", "zh-CN"],
           approvedBy: USER, approvedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString() };
-        const issued = bridge.issueGrant(request.request.requestId, grantInput, USER); const reservationId = `${document.id}:search:1`;
+        const issued = bridge.issueGrant(request.request.requestId, grantInput, USER);
+        const createdRun = bridge.createRun(request.request.requestId, sha(`${document.id}:research-run`), SYSTEM);
+        const startedRun = bridge.startRun(request.request.requestId, createdRun.run.runId, SYSTEM);
+        const reservationId = `${document.id}:search:1`;
         bridge.reserveOperation(request.request.requestId, issued.grant.grant.grantId, "search", reservationId,
-          { calls: 1, inputTokens: 0, outputTokens: 0, costMicrosCny: 0, costMicrosUsd: 5_000, durationMs: 30_000 });
+          { calls: 1, inputTokens: 0, outputTokens: 0, costMicrosCny: 0, costMicrosUsd: 5_000, durationMs: 30_000 },
+          { runId: startedRun.run.runId, providerId: "brave-search", round: 1,
+            query: "IANA example domains documentation", language: "en", country: "US",
+            idempotencyKey: `${document.id}:search:1` });
         const started = Date.now();
         try {
           const response = await invokeResearchWebBroker({ providerId: "brave-search", capability: "search", credentialFd: brave.fd,

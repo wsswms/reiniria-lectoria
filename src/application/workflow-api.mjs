@@ -1,5 +1,5 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, m5cQa = null, modelQa = null, remediation = null, disposition = null, research = null, workCopies, validation, reviews, exports,
+  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
     retriever = null, integrity = null }) {
     this.imports = imports;
     this.reimports = reimports;
@@ -9,6 +9,7 @@ export class WorkflowApi {
     this.m5cQa = m5cQa;
     this.modelQa = modelQa;
     this.remediation = remediation;
+    this.recovery = recovery;
     this.disposition = disposition;
     this.research = research;
     this.workCopies = workCopies;
@@ -69,10 +70,15 @@ export class WorkflowApi {
       case "qa:get": return this.m5cQa.get(payload.qaRunId);
       case "qa:decide": return this.m5cQa.decideFinding(payload.qaRunId, payload.findingId, payload.decision, payload.actor);
       case "qa:retranslate": return this.remediation.retranslate(payload.qaRunId, payload.findingIds, payload.request, payload.actor);
+      case "flow:resolve": return this.recovery.resolve(payload.workflowId, payload.expectedVersion, payload.action, payload.request ?? null, payload.actor);
       case "research:propose": return this.research.propose(payload.workflowId, payload.request, payload.actor);
       case "research:submit": return this.research.submit(payload.requestId, payload.expectedVersion, payload.actor);
       case "research:decide": return this.research.decide(payload.requestId, payload.expectedVersion, payload.decision, payload.actor);
       case "research:grant": return this.research.issueGrant(payload.requestId, payload.grant, payload.actor);
+      case "research:run-create": return this.research.createRun(payload.requestId, payload.requestDigest, payload.actor);
+      case "research:run-start": return this.research.startRun(payload.requestId, payload.runId, payload.actor);
+      case "research:run-get": return this.research.getRun(payload.requestId, payload.runId);
+      case "research:run-retry-unknown": return this.research.retryUnknownRun(payload.requestId, payload.runId, payload.actor);
       case "disposition:decide": return this.disposition.decide(payload.workflowId, payload.selections, payload.actor);
       case "disposition:get": return this.disposition.get(payload.workflowId);
       case "disposition:decide-proposal": return this.disposition.decideProposal(payload.proposalId, payload.decision, payload.actor);

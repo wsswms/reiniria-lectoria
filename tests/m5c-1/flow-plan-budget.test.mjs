@@ -53,8 +53,14 @@ test("flow budget atomically enforces category total idempotency unknown and no-
     assert.equal(budgets.reserve(fixture.workflowId, "translation", "translate-1", usage()).decision, "reserved");
     assert.equal(budgets.reserve(fixture.workflowId, "translation", "translate-1", usage()).reused, true);
     assert.throws(() => budgets.reserve(fixture.workflowId, "qa", "translate-1", usage()), /idempotency/);
-    assert.equal(budgets.settle(fixture.workflowId, "translate-1", usage({ inputTokens: 8 })).decision, "settled");
+    const settledUsage = usage({ inputTokens: 8 });
+    assert.equal(budgets.settle(fixture.workflowId, "translate-1", settledUsage).decision, "settled");
+    assert.equal(budgets.settle(fixture.workflowId, "translate-1", settledUsage).reused, true);
+    assert.throws(() => budgets.settle(fixture.workflowId, "translate-1", usage({ inputTokens: 7 })), /terminal budget idempotency conflict/);
     budgets.reserve(fixture.workflowId, "qa", "qa-unknown", usage()); budgets.unknown(fixture.workflowId, "qa-unknown");
+    assert.deepEqual(fixture.database.prepare(`SELECT flow_state AS flowState, outcome_state AS outcomeState, pause_reason AS pauseReason
+      FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?`).get(fixture.workspaceId, fixture.workflowId),
+    { flowState: "paused", outcomeState: "unknown", pauseReason: "qa-unknown-outcome" });
     assert.throws(() => budgets.reserve(fixture.workflowId, "qa", "qa-2", usage()), /unknown outcome stop line/);
     const current = budgets.get(fixture.workflowId);
     assert.throws(() => budgets.expand(fixture.workflowId, current.version, { ...current.policy, maxCalls: current.policy.maxCalls - 1 }, user), /unknown or missing fields|cannot reduce/);

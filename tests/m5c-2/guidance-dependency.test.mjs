@@ -81,5 +81,28 @@ test("model-assisted planning is budgeted while disabled or failed planning keep
     const fallback = await disabledExecutor.execute(disabledId, { providerId: "fixture-planner", modelId: "fixture-model", idempotencyKey: "disabled",
       estimatedUsage: { calls: 1, inputTokens: 1, outputTokens: 1, costMicrosCny: 0, costMicrosUsd: 0, durationMs: 1 } });
     assert.equal(fallback.status, "local-only"); assert.equal(fallback.plan.plan.planRevisionId, disabled.plan.planRevisionId); assert.equal(calls, 0);
+
+    const unknownId = randomUUID(); plans.create({ workflowId: unknownId, documentId: fixture.documentId,
+      sourceRevisionId: fixture.sourceRevisionId, targetLanguage: "en" }, user);
+    const uncertain = new M5CPlannerExecutor(fixture.database, fixture.workspaceId, { plans,
+      invokePlanner: async () => { throw Object.assign(new Error("bounded malformed fixture"), { category: "malformed-response" }); } });
+    const paused = await uncertain.execute(unknownId, { providerId: "fixture-planner", modelId: "fixture-model", idempotencyKey: "unknown",
+      estimatedUsage: { calls: 1, inputTokens: 10, outputTokens: 10, costMicrosCny: 10, costMicrosUsd: 0, durationMs: 10 } });
+    assert.equal(paused.status, "paused-unknown"); assert.deepEqual(plans.get(unknownId).flow,
+      { workflowId: unknownId, flowState: "paused", outcomeState: "unknown", pauseReason: "planner-unknown-outcome",
+        plannerEnabled: 1, version: 1, qaCycles: 0, researchCycles: 0, retranslationCount: 0 });
+
+    const malformedId = randomUUID(); const malformedLocal = plans.create({ workflowId: malformedId, documentId: fixture.documentId,
+      sourceRevisionId: fixture.sourceRevisionId, targetLanguage: "ko" }, user);
+    const malformed = new M5CPlannerExecutor(fixture.database, fixture.workspaceId, { plans,
+      invokePlanner: async () => ({ responseId: "planner-malformed", items: malformedLocal.plan.items,
+        researchScope: malformedLocal.plan.researchScope, qaProfile: malformedLocal.plan.qaProfile,
+        usage: { calls: "one" } }) });
+    const malformedResult = await malformed.execute(malformedId, { providerId: "fixture-planner", modelId: "fixture-model", idempotencyKey: "malformed-usage",
+      estimatedUsage: { calls: 1, inputTokens: 10, outputTokens: 10, costMicrosCny: 10, costMicrosUsd: 0, durationMs: 10 } });
+    assert.equal(malformedResult.status, "paused-unknown"); assert.equal(malformedResult.category, "malformed-response");
+    assert.equal(plans.get(malformedId).plan.revision, 1, "a malformed response cannot partly revise the Plan");
+    assert.deepEqual(fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'planner:malformed-usage' ORDER BY rowid")
+      .all(fixture.workspaceId, malformedId).map((row) => row.entryType), ["reserved", "unknown"]);
   } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
 });

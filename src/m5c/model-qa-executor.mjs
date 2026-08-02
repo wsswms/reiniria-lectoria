@@ -2,6 +2,7 @@ import { contentDigest, budgetUsageContract } from "./contracts.mjs";
 import { M5CQAService } from "./qa-service.mjs";
 import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
 import { WorkCopyService } from "../translation/work-copy-service.mjs";
+import { isUncertainProviderOutcome } from "./provider-outcome.mjs";
 
 export class ModelQAExecutionError extends Error {
   constructor(message = "model QA execution failed", category = "provider", providerCode) { super(message); this.name = "ModelQAExecutionError"; this.code = "MODEL_QA_EXECUTION_FAILED"; this.category = category;
@@ -34,19 +35,30 @@ export class M5CModelQAExecutor {
     let response;
     try { response = await this.invokeModelQa(request, { providerId, modelId }); }
     catch (error) {
-      if (error?.category === "unknown-outcome") this.budgets.unknown(workflowId, reservationId, { providerId, modelId });
-      else this.budgets.release(workflowId, reservationId, { providerId, modelId, category: error?.category ?? "provider" });
-      throw new ModelQAExecutionError("model QA execution failed", error?.category ?? "provider", error?.providerCode);
+      const category = error?.category ?? "provider";
+      if (isUncertainProviderOutcome(category)) this.budgets.unknown(workflowId, reservationId,
+        { providerId, modelId, category, pauseReason: "qa-unknown-outcome" });
+      else this.budgets.release(workflowId, reservationId, { providerId, modelId, category });
+      throw new ModelQAExecutionError("model QA execution failed", category, error?.providerCode);
     }
     if (!response || typeof response !== "object" || Array.isArray(response) || !Array.isArray(response.findings)
       || typeof response.responseId !== "string" || response.responseId.length === 0) {
-      this.budgets.release(workflowId, reservationId, { providerId, modelId, category: "malformed-response" });
+      this.budgets.unknown(workflowId, reservationId,
+        { providerId, modelId, category: "malformed-response", pauseReason: "qa-unknown-outcome" });
       throw new ModelQAExecutionError("model QA response is malformed", "malformed-response");
     }
-    const usage = budgetUsageContract(response.usage);
-    const run = this.qa.run(workflowId, { layers: ["invariant", "heuristic", "model"], scope, segmentIds,
-      modelFindings: response.findings, model: { providerId, modelId, responseId: response.responseId, requestDigest: contentDigest(request) } });
-    const settlement = this.budgets.settle(workflowId, reservationId, usage, { qaRunId: run.qaRunId, responseId: response.responseId });
-    return Object.freeze({ run, requestDigest: contentDigest(request), settlement });
+    try {
+      const usage = budgetUsageContract(response.usage); let run; let settlement;
+      this.database.transaction(() => {
+        run = this.qa.run(workflowId, { layers: ["invariant", "heuristic", "model"], scope, segmentIds,
+          modelFindings: response.findings, model: { providerId, modelId, responseId: response.responseId, requestDigest: contentDigest(request) } });
+        settlement = this.budgets.settle(workflowId, reservationId, usage, { qaRunId: run.qaRunId, responseId: response.responseId });
+      }).immediate();
+      return Object.freeze({ run, requestDigest: contentDigest(request), settlement });
+    } catch {
+      this.budgets.unknown(workflowId, reservationId,
+        { providerId, modelId, category: "malformed-response", pauseReason: "qa-unknown-outcome" });
+      throw new ModelQAExecutionError("model QA response is malformed", "malformed-response");
+    }
   }
 }

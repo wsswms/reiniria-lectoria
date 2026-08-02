@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 25;
+export const CURRENT_SCHEMA_VERSION = 26;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -3036,6 +3036,52 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER context_persistence_proposal_decisions_no_delete BEFORE DELETE ON context_persistence_proposal_decisions BEGIN SELECT RAISE(ABORT, 'context persistence proposal decision is immutable'); END;
       CREATE TRIGGER context_persistence_proposal_applications_no_update BEFORE UPDATE ON context_persistence_proposal_applications BEGIN SELECT RAISE(ABORT, 'context persistence proposal application is immutable'); END;
       CREATE TRIGGER context_persistence_proposal_applications_no_delete BEFORE DELETE ON context_persistence_proposal_applications BEGIN SELECT RAISE(ABORT, 'context persistence proposal application is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 26,
+    name: "m5c-cross-budget-research-operation-binding",
+    sql: `
+      CREATE TABLE m5c_research_operations (
+        workspace_id TEXT NOT NULL,
+        reservation_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('search', 'fetch', 'research')),
+        operation_digest TEXT NOT NULL CHECK(length(operation_digest) = 71 AND substr(operation_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, reservation_id),
+        UNIQUE (workspace_id, query_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES m5c_research_bindings(workspace_id, request_id),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id),
+        FOREIGN KEY (workspace_id, query_id) REFERENCES research_queries(workspace_id, query_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE translation_flow_recovery_decisions (
+        workspace_id TEXT NOT NULL,
+        recovery_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        paused_version INTEGER NOT NULL CHECK(paused_version >= 0),
+        action TEXT NOT NULL CHECK(action IN ('continue-local', 'retry', 'terminate')),
+        pause_reason TEXT NOT NULL,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, recovery_id),
+        UNIQUE (workspace_id, workflow_id, paused_version),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TRIGGER m5c_research_operations_no_update BEFORE UPDATE ON m5c_research_operations BEGIN SELECT RAISE(ABORT, 'M5C research operation binding is immutable'); END;
+      CREATE TRIGGER m5c_research_operations_no_delete BEFORE DELETE ON m5c_research_operations BEGIN SELECT RAISE(ABORT, 'M5C research operation binding is immutable'); END;
+      CREATE TRIGGER translation_flow_recovery_decisions_no_update BEFORE UPDATE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
+      CREATE TRIGGER translation_flow_recovery_decisions_no_delete BEFORE DELETE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
     `,
   }),
 ]);

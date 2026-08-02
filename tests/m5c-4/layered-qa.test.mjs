@@ -9,6 +9,8 @@ import { M5CQAConflictError, M5CQAService } from "../../src/m5c/qa-service.mjs";
 import { TemporaryContextService } from "../../src/m5c/temporary-context-service.mjs";
 import { M5CRemediationService, RemediationConflictError } from "../../src/m5c/remediation-service.mjs";
 import { M5CModelQAExecutor } from "../../src/m5c/model-qa-executor.mjs";
+import { FlowRecoveryConflictError, FlowRecoveryService } from "../../src/m5c/flow-recovery-service.mjs";
+import { TranslationFlowBudgetService } from "../../src/m5c/flow-budget-service.mjs";
 import { WorkCopyService } from "../../src/translation/work-copy-service.mjs";
 import { TranslationExecutor } from "../../src/provider/translation-executor.mjs";
 import { PricingBudgetService } from "../../src/provider/cost-budget.mjs";
@@ -109,6 +111,77 @@ test("controlled model QA binds a bounded request and settles the article QA bud
   } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("a malformed model QA result is conservatively unknown and atomically pauses the article", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-model-qa-unknown-")); const fixture = setup(join(root, "app.sqlite3"));
+  try {
+    const copies = ready(fixture); const executor = new M5CModelQAExecutor(fixture.database, fixture.workspaceId, { workCopies: copies,
+      invokeModelQa: async () => ({ responseId: "malformed-finding", findings: [{ segmentId: "outside-scope", severity: "error", code: "bad", details: {} }],
+        usage: { calls: 1, inputTokens: 20, outputTokens: 5, costMicrosCny: 25, costMicrosUsd: 0, durationMs: 10 } }) });
+    await assert.rejects(() => executor.execute(fixture.workflowId, { providerId: "fixture-qa", modelId: "fixture-model", idempotencyKey: "qa-unknown",
+      estimatedUsage: { calls: 1, inputTokens: 100, outputTokens: 20, costMicrosCny: 100, costMicrosUsd: 0, durationMs: 20 } }),
+    (error) => error.category === "malformed-response");
+    assert.deepEqual(fixture.database.prepare(`SELECT flow_state AS flowState, outcome_state AS outcomeState, pause_reason AS pauseReason
+      FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?`).get(fixture.workspaceId, fixture.workflowId),
+    { flowState: "paused", outcomeState: "unknown", pauseReason: "qa-unknown-outcome" });
+    assert.deepEqual(fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'qa:qa-unknown' ORDER BY rowid")
+      .all(fixture.workspaceId, fixture.workflowId).map((row) => row.entryType), ["reserved", "unknown"]);
+  } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a user-expanded unknown stop line permits an explicit model QA retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-model-qa-retry-")); const fixture = setup(join(root, "app.sqlite3"));
+  try {
+    const copies = ready(fixture); let calls = 0;
+    const executor = new M5CModelQAExecutor(fixture.database, fixture.workspaceId, { workCopies: copies,
+      invokeModelQa: async () => { calls += 1; if (calls === 1) throw Object.assign(new Error("private timeout"), { category: "timeout" });
+        return { responseId: "fixture-response-retry", findings: [],
+          usage: { calls: 1, inputTokens: 20, outputTokens: 5, costMicrosCny: 25, costMicrosUsd: 0, durationMs: 10 } }; } });
+    const request = { providerId: "fixture-qa", modelId: "fixture-model", idempotencyKey: "qa-first",
+      estimatedUsage: { calls: 1, inputTokens: 100, outputTokens: 20, costMicrosCny: 100, costMicrosUsd: 0, durationMs: 20 } };
+    await assert.rejects(() => executor.execute(fixture.workflowId, request), (error) => error.category === "timeout");
+    const paused = fixture.database.prepare("SELECT version FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?")
+      .get(fixture.workspaceId, fixture.workflowId);
+    const budgets = new TranslationFlowBudgetService(fixture.database, fixture.workspaceId); const current = budgets.get(fixture.workflowId);
+    const { schemaVersion: _schemaVersion, workflowId: _workflowId, revision: _revision, authorizedBy: _authorizedBy,
+      createdAt: _createdAt, ...limits } = current.policy;
+    budgets.expand(fixture.workflowId, current.version, { ...limits, maxUnknownOutcomes: 2,
+      categories: Object.fromEntries(Object.entries(limits.categories).map(([key, value]) => [key, { ...value }])) }, user);
+    const recovery = new FlowRecoveryService(fixture.database, fixture.workspaceId);
+    assert.deepEqual(recovery.resolve(fixture.workflowId, paused.version, "retry", null, user), {
+      workflowId: fixture.workflowId, action: "retry", previousPauseReason: "qa-unknown-outcome", flowState: "qa", outcomeState: "none" });
+    const retried = await executor.execute(fixture.workflowId, { ...request, idempotencyKey: "qa-user-retry" });
+    assert.equal(typeof retried.run.qaRunId, "string"); assert.equal(calls, 2);
+    assert.deepEqual(fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'qa:qa-user-retry' ORDER BY rowid")
+      .all(fixture.workspaceId, fixture.workflowId).map((row) => row.entryType), ["reserved", "settled"]);
+  } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("flow termination is user-only immutable idempotent and cancels active work", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-terminate-")); const fixture = setup(join(root, "app.sqlite3"));
+  try {
+    const copies = ready(fixture); const contexts = new TemporaryContextService(fixture.database, fixture.workspaceId);
+    const queued = contexts.enqueueTranslation(fixture.workflowId, { providerId: "fixture-provider", modelId: "fixture-model",
+      idempotencyKey: "terminate-active", estimatedUsage: {
+        calls: 2, inputTokens: 100, outputTokens: 20, costMicrosCny: 100, costMicrosUsd: 0, durationMs: 20 } });
+    const executor = new M5CModelQAExecutor(fixture.database, fixture.workspaceId, { workCopies: copies,
+      invokeModelQa: async () => { throw Object.assign(new Error("private disconnect"), { category: "unknown-outcome" }); } });
+    await assert.rejects(() => executor.execute(fixture.workflowId, { providerId: "fixture-qa", modelId: "fixture-model", idempotencyKey: "qa-terminate",
+      estimatedUsage: { calls: 1, inputTokens: 100, outputTokens: 20, costMicrosCny: 100, costMicrosUsd: 0, durationMs: 20 } }));
+    const paused = fixture.database.prepare("SELECT version FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?")
+      .get(fixture.workspaceId, fixture.workflowId);
+    const recovery = new FlowRecoveryService(fixture.database, fixture.workspaceId);
+    assert.throws(() => recovery.resolve(fixture.workflowId, paused.version, "terminate", null, system), FlowRecoveryConflictError);
+    const terminated = recovery.resolve(fixture.workflowId, paused.version, "terminate", null, user);
+    assert.deepEqual(recovery.resolve(fixture.workflowId, paused.version, "terminate", null, user), terminated);
+    assert.throws(() => recovery.resolve(fixture.workflowId, paused.version, "retry", null, user), /idempotency conflict/);
+    assert.equal(terminated.flowState, "canceled"); assert.equal(terminated.outcomeState, "failed");
+    assert.equal(fixture.database.prepare("SELECT state FROM translation_tasks WHERE workspace_id = ? AND task_id = ?")
+      .get(fixture.workspaceId, queued.task.task.task_id).state, "canceled");
+    assert.equal(fixture.database.prepare("SELECT count(*) AS count FROM translation_flow_recovery_decisions WHERE workspace_id = ? AND workflow_id = ?")
+      .get(fixture.workspaceId, fixture.workflowId).count, 1);
+  } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("machine translation settles FlowBudget and final target revision QA gates review and export", async () => {
   const fixture = await applicationWorkspace("lectoria-m5c-complete-flow-"); const root = fixture.root;
   try {
@@ -160,7 +233,7 @@ test("machine translation settles FlowBudget and final target revision QA gates 
   } finally { await fixture.close(); }
 });
 
-test("an unknown M5C translation outcome consumes the article reservation and pauses every remaining segment", async () => {
+test("a malformed translation response after provider handoff is conservatively unknown and pauses every remaining segment", async () => {
   const fixture = await applicationWorkspace("lectoria-m5c-unknown-flow-");
   try {
     const imported = await fixture.imports.import({ format: "text", content: "First public segment.\n\nSecond public segment.", title: "M5C unknown flow" });
@@ -179,16 +252,36 @@ test("an unknown M5C translation outcome consumes the article reservation and pa
     pricing.addPolicy({ policyVersion: "m5c-unknown-provider-budget", currency: "CNY", softLimitMicros: 100_000, hardLimitMicros: 200_000, unknownPriceAction: "block" });
     pricing.assignTask(queued.task.task.task_id, "m5c-unknown-provider-budget");
     let calls = 0; const executor = new TranslationExecutor(fixture.database, fixture.workspaceId, { budgets: pricing, pricingVersion: "fixture-cny",
-      credentialRef: "fixture:m5c", invokeProvider: async () => { calls += 1; throw Object.assign(new Error("private disconnect"), { category: "unknown-outcome", retryable: false }); } });
-    const result = await executor.executeNext(); assert.equal(result.status, "failed"); assert.equal(result.error.category, "unknown-outcome");
+      credentialRef: "fixture:m5c", invokeProvider: async () => { calls += 1; throw Object.assign(new Error("private malformed response"), { category: "malformed-response", retryable: false }); } });
+    const result = await executor.executeNext(); assert.equal(result.status, "failed"); assert.equal(result.error.category, "malformed-response");
     assert.equal((await executor.executeNext()).status, "idle"); assert.equal(calls, 1);
-    const control = fixture.database.prepare("SELECT flow_state AS flowState, outcome_state AS outcomeState, pause_reason AS pauseReason FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?")
+    const control = fixture.database.prepare("SELECT flow_state AS flowState, outcome_state AS outcomeState, pause_reason AS pauseReason, version FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?")
       .get(fixture.workspaceId, workflowId);
-    assert.deepEqual(control, { flowState: "paused", outcomeState: "unknown", pauseReason: "translation-unknown-outcome" });
+    assert.deepEqual({ flowState: control.flowState, outcomeState: control.outcomeState, pauseReason: control.pauseReason },
+      { flowState: "paused", outcomeState: "unknown", pauseReason: "translation-unknown-outcome" });
     const ledger = fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'translation:unknown-flow' ORDER BY rowid")
       .all(fixture.workspaceId, workflowId).map((row) => row.entryType);
     assert.deepEqual(ledger, ["reserved", "unknown"]);
     assert.equal(fixture.database.prepare("SELECT count(*) AS total FROM translation_candidates WHERE workspace_id = ? AND workflow_id = ?").get(fixture.workspaceId, workflowId).total, 0);
     assert.equal(fixture.database.prepare("SELECT count(*) AS total FROM budget_reservations WHERE workspace_id = ? AND state = 'reserved'").get(fixture.workspaceId).total, 0);
+
+    const flowBudgets = new TranslationFlowBudgetService(fixture.database, fixture.workspaceId); const current = flowBudgets.get(workflowId);
+    const { schemaVersion: _schemaVersion, workflowId: _workflowId, revision: _revision, authorizedBy: _authorizedBy,
+      createdAt: _createdAt, ...limits } = current.policy;
+    flowBudgets.expand(workflowId, current.version, { ...limits, maxUnknownOutcomes: 2,
+      categories: Object.fromEntries(Object.entries(limits.categories).map(([key, value]) => [key, { ...value }])) }, user);
+    const recovery = new FlowRecoveryService(fixture.database, fixture.workspaceId);
+    const resumed = recovery.resolve(workflowId, control.version, "retry", { providerId: "fixture-provider", modelId: "fixture-model",
+      policyVersion: "m5c-unknown-provider-budget", idempotencyKey: "unknown-flow-user-retry", estimatedUsage: {
+        calls: 2, inputTokens: 10_000, outputTokens: 2_048, costMicrosCny: 50_000, costMicrosUsd: 0, durationMs: 10_000 } }, user);
+    assert.equal(resumed.flowState, "translating"); assert.ok(resumed.taskId); pricing.assignTask(resumed.taskId, "m5c-unknown-provider-budget");
+    const retryExecutor = new TranslationExecutor(fixture.database, fixture.workspaceId, { budgets: pricing, pricingVersion: "fixture-cny",
+      credentialRef: "fixture:m5c", invokeProvider: async (request) => providerResponseContract({ responseId: `retry-${request.attemptId}`,
+        providerId: request.providerId, modelId: request.modelId, candidates: request.segments.map((segment) => ({ segmentId: segment.segmentId, text: segment.sourceText })),
+        usage: { inputTokens: 20, outputTokens: 10, cachedInputTokens: 0, totalTokens: 30 } }, request) });
+    assert.equal((await retryExecutor.executeNext()).status, "completed"); assert.equal((await retryExecutor.executeNext()).status, "completed");
+    assert.equal((await retryExecutor.executeNext()).status, "idle");
+    assert.deepEqual(fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'translation:unknown-flow-user-retry' ORDER BY rowid")
+      .all(fixture.workspaceId, workflowId).map((row) => row.entryType), ["reserved", "settled"]);
   } finally { await fixture.close(); }
 });

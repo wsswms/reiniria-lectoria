@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { budgetUsageContract, contentDigest } from "./contracts.mjs";
 import { FlowPlanService } from "./flow-plan-service.mjs";
 import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
+import { isUncertainProviderOutcome } from "./provider-outcome.mjs";
 
 export class M5CPlannerExecutor {
   constructor(database, trustedWorkspaceId, { invokePlanner, now = () => new Date(), id = () => randomUUID(), plans = null, budgets = null } = {}) {
@@ -26,18 +27,36 @@ export class M5CPlannerExecutor {
     let response;
     try { response = await this.invokePlanner(request, { providerId, modelId }); }
     catch (error) {
-      if (error?.category === "unknown-outcome") this.budgets.unknown(workflowId, reservationId, { providerId, modelId });
-      else this.budgets.release(workflowId, reservationId, { providerId, modelId, category: error?.category ?? "provider" });
-      return Object.freeze({ status: "fallback-local", category: error?.category ?? "provider", plan: current });
+      const category = error?.category ?? "provider";
+      if (isUncertainProviderOutcome(category)) {
+        this.budgets.unknown(workflowId, reservationId, { providerId, modelId, category, pauseReason: "planner-unknown-outcome" });
+        return Object.freeze({ status: "paused-unknown", category, plan: this.plans.get(workflowId) });
+      }
+      this.budgets.release(workflowId, reservationId, { providerId, modelId, category });
+      return Object.freeze({ status: "fallback-local", category, plan: current });
     }
+    let actualUsage;
     if (!response || !Array.isArray(response.items) || !response.researchScope || !response.qaProfile || typeof response.responseId !== "string") {
-      this.budgets.release(workflowId, reservationId, { providerId, modelId, category: "malformed-response" });
-      return Object.freeze({ status: "fallback-local", category: "malformed-response", plan: current });
+      this.budgets.unknown(workflowId, reservationId, { providerId, modelId, category: "malformed-response", pauseReason: "planner-unknown-outcome" });
+      return Object.freeze({ status: "paused-unknown", category: "malformed-response", plan: this.plans.get(workflowId) });
     }
-    const items = response.items.map((item) => ({ ...item, itemId: this.id() }));
-    const revised = this.plans.revisePlan(workflowId, current.planHead.version, { plannerMode: "model-assisted", items,
-      researchScope: response.researchScope, qaProfile: response.qaProfile }, { type: "model", id: `${providerId}:${modelId}` });
-    this.budgets.settle(workflowId, reservationId, budgetUsageContract(response.usage), { responseId: response.responseId, planRevisionId: revised.plan.planRevisionId });
-    return Object.freeze({ status: "model-assisted", plan: revised });
+    try { actualUsage = budgetUsageContract(response.usage); }
+    catch {
+      this.budgets.unknown(workflowId, reservationId, { providerId, modelId, category: "malformed-response", pauseReason: "planner-unknown-outcome" });
+      return Object.freeze({ status: "paused-unknown", category: "malformed-response", plan: this.plans.get(workflowId) });
+    }
+    try {
+      let revised;
+      this.database.transaction(() => {
+        const items = response.items.map((item) => ({ ...item, itemId: this.id() }));
+        revised = this.plans.revisePlan(workflowId, current.planHead.version, { plannerMode: "model-assisted", items,
+          researchScope: response.researchScope, qaProfile: response.qaProfile }, { type: "model", id: `${providerId}:${modelId}` });
+        this.budgets.settle(workflowId, reservationId, actualUsage, { responseId: response.responseId, planRevisionId: revised.plan.planRevisionId });
+      }).immediate();
+      return Object.freeze({ status: "model-assisted", plan: revised });
+    } catch {
+      this.budgets.unknown(workflowId, reservationId, { providerId, modelId, category: "malformed-response", pauseReason: "planner-unknown-outcome" });
+      return Object.freeze({ status: "paused-unknown", category: "malformed-response", plan: this.plans.get(workflowId) });
+    }
   }
 }

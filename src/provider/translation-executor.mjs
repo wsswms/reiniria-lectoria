@@ -5,6 +5,7 @@ import { parseModelResponse } from "./model-response.mjs";
 import { TranslationTaskOrchestrator } from "./task-orchestrator.mjs";
 import { MachineCandidateService } from "../translation/machine-candidate-service.mjs";
 import { TranslationFlowBudgetService } from "../m5c/flow-budget-service.mjs";
+import { isUncertainProviderOutcome } from "../m5c/provider-outcome.mjs";
 
 function required(value, name) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -76,13 +77,11 @@ export class TranslationExecutor {
       .get(this.workspaceId, attemptId) ?? null;
   }
 
-  #finalizeFlowBudget(attemptId, outcome) {
+  #finalizeFlowBudget(attemptId, outcome, providerCategory = null) {
     const binding = this.#flowBinding(attemptId); if (!binding) return null;
     if (outcome === "unknown") {
-      const result = this.flowBudgets.unknown(binding.workflowId, binding.reservationId, { attemptId, category: "translation-provider" });
-      this.database.prepare("UPDATE translation_flow_controls SET flow_state = 'paused', outcome_state = 'unknown', pause_reason = 'translation-unknown-outcome', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ?")
-        .run(this.now().toISOString(), this.workspaceId, binding.workflowId);
-      return result;
+      return this.flowBudgets.unknown(binding.workflowId, binding.reservationId,
+        { attemptId, category: providerCategory ?? "translation-provider", pauseReason: "translation-unknown-outcome" });
     }
     const states = this.database.prepare(`SELECT attempt.state FROM m5c_translation_attempt_bindings binding
       JOIN translation_attempts attempt ON attempt.workspace_id = binding.workspace_id AND attempt.attempt_id = binding.attempt_id
@@ -242,39 +241,56 @@ export class TranslationExecutor {
     } catch (error) {
       const normalized = normalizedFailure(error);
       try {
-        this.tasks.fail(lease.attempt_id, running.version, this.workerId, normalized);
-        if (normalized.category === "unknown-outcome") this.budgets.finalize(reservation.reservation_id, null);
-        else this.budgets.release(reservation.reservation_id);
-        this.#finalizeFlowBudget(lease.attempt_id, normalized.category === "unknown-outcome" ? "unknown" : "failed");
+        const uncertain = isUncertainProviderOutcome(normalized.category);
+        this.database.transaction(() => {
+          this.tasks.fail(lease.attempt_id, running.version, this.workerId,
+            uncertain ? { ...normalized, category: "unknown-outcome", retryable: false } : normalized);
+          if (uncertain) this.budgets.finalize(reservation.reservation_id, null);
+          else this.budgets.release(reservation.reservation_id);
+          this.#finalizeFlowBudget(lease.attempt_id, uncertain ? "unknown" : "failed", normalized.category);
+        }).immediate();
       } catch {
         // A concurrent terminal transition or a local persistence failure is recovered by lease expiry.
       }
       return Object.freeze({ status: "failed", attemptId: lease.attempt_id, error: normalized });
     }
-    const usage = this.budgets.pricedUsage(request.providerId, request.modelId, this.pricingVersion, {
-      providerId: request.providerId,
-      modelId: request.modelId,
-      providerResponseId: providerResponse.responseId,
-      ...providerResponse.usage,
-    });
-    let candidate;
-    let budget;
-    this.database.transaction(() => {
-      this.tasks.complete(lease.attempt_id, running.version, this.workerId, parsed.outputDigest, { usage });
-      candidate = this.candidates.accept(lease.attempt_id, strictResponse);
-      const coverage = this.database.prepare(`SELECT
-        (SELECT count(*) FROM source_segment_versions source JOIN translation_workflows workflow
-          ON workflow.workspace_id = source.workspace_id AND workflow.source_revision_id = source.source_revision_id
-          WHERE workflow.workspace_id = ? AND workflow.workflow_id = ? AND source.translatable = 1) AS expected,
-        (SELECT count(DISTINCT provenance.segment_id) FROM machine_candidate_provenance provenance
-          WHERE provenance.workspace_id = ? AND provenance.workflow_id = ?) AS actual`).get(this.workspaceId, lease.workflow_id, this.workspaceId, lease.workflow_id);
-      if (coverage.expected === coverage.actual) this.database.prepare("UPDATE translation_workflows SET state = 'candidate-valid', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'draft-machine'")
-        .run(this.now().toISOString(), this.workspaceId, lease.workflow_id);
-      const usageRecord = this.database.prepare("SELECT usage_record_id FROM usage_cost_records WHERE workspace_id = ? AND attempt_id = ?")
-        .get(this.workspaceId, lease.attempt_id);
-      budget = this.budgets.finalize(reservation.reservation_id, usageRecord?.usage_record_id ?? null);
-    })();
-    const flowBudget = this.#finalizeFlowBudget(lease.attempt_id, "completed");
-    return Object.freeze({ status: "completed", taskId: lease.task_id, attemptId: lease.attempt_id, candidate, usage, budget, ...(flowBudget ? { flowBudget } : {}) });
+    try {
+      const usage = this.budgets.pricedUsage(request.providerId, request.modelId, this.pricingVersion, {
+        providerId: request.providerId,
+        modelId: request.modelId,
+        providerResponseId: providerResponse.responseId,
+        ...providerResponse.usage,
+      });
+      let candidate; let budget; let flowBudget;
+      this.database.transaction(() => {
+        this.tasks.complete(lease.attempt_id, running.version, this.workerId, parsed.outputDigest, { usage });
+        candidate = this.candidates.accept(lease.attempt_id, strictResponse);
+        const coverage = this.database.prepare(`SELECT
+          (SELECT count(*) FROM source_segment_versions source JOIN translation_workflows workflow
+            ON workflow.workspace_id = source.workspace_id AND workflow.source_revision_id = source.source_revision_id
+            WHERE workflow.workspace_id = ? AND workflow.workflow_id = ? AND source.translatable = 1) AS expected,
+          (SELECT count(DISTINCT provenance.segment_id) FROM machine_candidate_provenance provenance
+            WHERE provenance.workspace_id = ? AND provenance.workflow_id = ?) AS actual`).get(this.workspaceId, lease.workflow_id, this.workspaceId, lease.workflow_id);
+        if (coverage.expected === coverage.actual) this.database.prepare("UPDATE translation_workflows SET state = 'candidate-valid', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'draft-machine'")
+          .run(this.now().toISOString(), this.workspaceId, lease.workflow_id);
+        const usageRecord = this.database.prepare("SELECT usage_record_id FROM usage_cost_records WHERE workspace_id = ? AND attempt_id = ?")
+          .get(this.workspaceId, lease.attempt_id);
+        budget = this.budgets.finalize(reservation.reservation_id, usageRecord?.usage_record_id ?? null);
+        flowBudget = this.#finalizeFlowBudget(lease.attempt_id, "completed");
+      }).immediate();
+      return Object.freeze({ status: "completed", taskId: lease.task_id, attemptId: lease.attempt_id, candidate, usage, budget, ...(flowBudget ? { flowBudget } : {}) });
+    } catch {
+      const unknown = normalizedFailure({ category: "unknown-outcome", retryable: false });
+      try {
+        this.database.transaction(() => {
+          this.tasks.fail(lease.attempt_id, running.version, this.workerId, unknown);
+          this.budgets.finalize(reservation.reservation_id, null);
+          this.#finalizeFlowBudget(lease.attempt_id, "unknown", "unknown-outcome");
+        }).immediate();
+      } catch {
+        // Lease expiry provides a final conservative recovery path if persistence itself is unavailable.
+      }
+      return Object.freeze({ status: "failed", attemptId: lease.attempt_id, error: unknown });
+    }
   }
 }

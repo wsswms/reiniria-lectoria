@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ContextDispositionService } from "../../src/m5c/context-disposition-service.mjs";
+import { FlowRecoveryService } from "../../src/m5c/flow-recovery-service.mjs";
+import { TranslationFlowBudgetService } from "../../src/m5c/flow-budget-service.mjs";
 import { FlowPlanService } from "../../src/m5c/flow-plan-service.mjs";
 import { M5CResearchBridgeService } from "../../src/m5c/research-bridge-service.mjs";
 import { TemporaryContextService } from "../../src/m5c/temporary-context-service.mjs";
+import { contentDigest } from "../../src/m5c/contracts.mjs";
 import { FtsRetriever } from "../../src/knowledge/fts-retriever.mjs";
 import { DomainStateService } from "../../src/domain/state-service.mjs";
 import { setup } from "../m5c-1/helpers.mjs";
@@ -40,12 +43,50 @@ test("research requests can only originate from an approved current Plan and cre
       providers: [{ capability: "search", providerId: "fixture-search", fallbackOrder: 0,
         budget: { maxSearchCalls: 1, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0 } }],
       limits: { maxRounds: 1, maxSearchCalls: 1, maxResultsPerSearch: 1, maxContentUrls: 1, maxDurationSeconds: 60,
-        maxRuns: 1, maxModelTokens: 0, maxCostMicrosUsd: 0 }, allowedDomains: ["example.com"], allowedLanguages: ["en", "zh-CN"],
+        maxRuns: 2, maxModelTokens: 0, maxCostMicrosUsd: 0 }, allowedDomains: ["example.com"], allowedLanguages: ["en", "zh-CN"],
       approvedBy: user, approvedAt: new Date(0).toISOString(), expiresAt: new Date(60_000).toISOString() };
     const issued = bridge.issueGrant(request.request.requestId, grant, user); assert.equal(issued.grant.status, "active");
-    const reservation = bridge.reserveOperation(request.request.requestId, grant.grantId, "search", "search:one",
-      { calls: 1, inputTokens: 0, outputTokens: 0, costMicrosCny: 0, costMicrosUsd: 0, durationMs: 10 });
-    assert.equal(reservation.decision, "reserved");
+    const createdRun = bridge.createRun(request.request.requestId, contentDigest({ fixture: "m5c-run" }), system);
+    const startedRun = bridge.startRun(request.request.requestId, createdRun.run.runId, system); assert.equal(startedRun.run.state, "running");
+    const usage = { calls: 1, inputTokens: 0, outputTokens: 0, costMicrosCny: 0, costMicrosUsd: 0, durationMs: 10 };
+    const contenders = Array.from({ length: 50 }, (_, index) => ({ reservationId: `search:${index}`,
+      details: { runId: startedRun.run.runId, providerId: "fixture-search", round: 1, query: `approved term ${index}`,
+        language: "en", country: "US", idempotencyKey: `search-${index}` } }));
+    const outcomes = await Promise.allSettled(contenders.map((contender) => Promise.resolve().then(() => bridge.reserveOperation(
+      request.request.requestId, grant.grantId, "search", contender.reservationId, usage, contender.details))));
+    assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+    const winnerIndex = outcomes.findIndex((outcome) => outcome.status === "fulfilled"); const winner = contenders[winnerIndex];
+    const reservation = outcomes[winnerIndex].value;
+    assert.equal(reservation.article.decision, "reserved"); assert.equal(reservation.research.entries[0].entryType, "reserved");
+    assert.equal(bridge.reserveOperation(request.request.requestId, grant.grantId, "search", winner.reservationId,
+      usage, winner.details).reused, true);
+    assert.throws(() => bridge.reserveOperation(request.request.requestId, grant.grantId, "search", winner.reservationId,
+      usage, { ...winner.details, query: "changed replay" }), /idempotency conflict/);
+    assert.equal(fixture.database.prepare("SELECT count(*) AS count FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND entry_type = 'reserved'")
+      .get(fixture.workspaceId, fixture.workflowId).count, 1, "losing article reservations roll back atomically");
+    assert.equal(fixture.database.prepare("SELECT count(*) AS count FROM research_queries WHERE workspace_id = ?")
+      .get(fixture.workspaceId).count, 1, "only one ResearchGrant reservation is committed");
+    assert.equal(fixture.database.prepare("SELECT count(*) AS count FROM m5c_research_operations WHERE workspace_id = ?")
+      .get(fixture.workspaceId).count, 1, "the cross-ledger binding is atomic");
+
+    const unknown = bridge.unknownOperation(request.request.requestId, winner.reservationId, { category: "timeout" });
+    assert.equal(unknown.run.state, "paused"); assert.equal(unknown.run.reason, "unknown-outcome");
+    assert.equal(bridge.reserveOperation(request.request.requestId, grant.grantId, "search", winner.reservationId,
+      usage, winner.details).reused, true, "reservation replay remains available after its ResearchRun pauses");
+    assert.equal(bridge.unknownOperation(request.request.requestId, winner.reservationId, { category: "timeout" }).article.reused, true);
+    const retriedRun = bridge.retryUnknownRun(request.request.requestId, startedRun.run.runId, user);
+    assert.equal(retriedRun.run.state, "queued"); assert.equal(retriedRun.run.attempt, 2);
+    assert.equal(bridge.startRun(request.request.requestId, retriedRun.run.runId, system).run.state, "running");
+
+    const flowControl = fixture.database.prepare("SELECT version FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?")
+      .get(fixture.workspaceId, fixture.workflowId);
+    const budgets = new TranslationFlowBudgetService(fixture.database, fixture.workspaceId); const current = budgets.get(fixture.workflowId);
+    const { schemaVersion: _schemaVersion, workflowId: _workflowId, revision: _revision, authorizedBy: _authorizedBy,
+      createdAt: _createdAt, ...limits } = current.policy;
+    budgets.expand(fixture.workflowId, current.version, { ...limits, maxUnknownOutcomes: 2,
+      categories: Object.fromEntries(Object.entries(limits.categories).map(([key, value]) => [key, { ...value }])) }, user);
+    assert.equal(new FlowRecoveryService(fixture.database, fixture.workspaceId)
+      .resolve(fixture.workflowId, flowControl.version, "retry", null, user).flowState, "research");
   } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
 });
 

@@ -9,7 +9,7 @@ import { assertDatabaseIntegrity, openWorkspaceDatabase } from "../../src/db/con
 import { CURRENT_SCHEMA_VERSION, MIGRATIONS, migrationChecksum } from "../../src/db/migrations.mjs";
 
 test("schema v21 migrates to the current M5C foundation without mutating prior tables", async () => {
-  assert.equal(CURRENT_SCHEMA_VERSION, 25);
+  assert.equal(CURRENT_SCHEMA_VERSION, 26);
   const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-migration-")); const filename = join(root, "app.sqlite3"); const workspaceId = randomUUID();
   const legacy = new Database(filename); legacy.pragma("foreign_keys = ON");
   legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
@@ -23,6 +23,7 @@ test("schema v21 migrates to the current M5C foundation without mutating prior t
   const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
   for (const name of ["translation_flow_controls", "flow_budget_policy_revisions", "flow_budget_ledger", "translation_context_plan_revisions",
     "translation_context_plan_items", "translation_context_plan_decisions", "user_guidance_revisions", "user_guidance_decisions",
-    "m5c_research_bindings", "context_disposition_decisions", "context_persistence_proposals"]) assert.equal(tables.has(name), true, name);
+    "m5c_research_bindings", "m5c_research_operations", "translation_flow_recovery_decisions",
+    "context_disposition_decisions", "context_persistence_proposals"]) assert.equal(tables.has(name), true, name);
   assertDatabaseIntegrity(database); database.close(); await rm(root, { recursive: true, force: true });
 });
