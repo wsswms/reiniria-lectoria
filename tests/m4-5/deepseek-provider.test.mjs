@@ -79,23 +79,25 @@ test("DeepSeek malformed, reordered, filtered, length-truncated and oversized ou
   decoded.candidates.reverse();
   reordered.choices[0].message.content = JSON.stringify(decoded);
   const cases = [
-    [new Response("not-json", { status: 200 }), "malformed-response"],
-    [new Response(JSON.stringify(reordered), { status: 200 }), "malformed-response"],
-    [new Response(JSON.stringify(success(input, { choices: [{ index: 0, finish_reason: "content_filter", message: { content: "" } }] })), { status: 200 }), "policy"],
-    [new Response(JSON.stringify(success(input, { choices: [{ index: 0, finish_reason: "length", message: { content: "{}" } }] })), { status: 200 }), "malformed-response"],
-    [new Response(JSON.stringify(success(input, { choices: [] })), { status: 200 }), "malformed-response"],
-    [new Response("x", { status: 200, headers: { "content-length": String(4 * 1024 * 1024 + 1) } }), "malformed-response"],
+    [new Response("not-json", { status: 200 }), "malformed-response", undefined],
+    [new Response(JSON.stringify(reordered), { status: 200 }), "malformed-response", "candidate-shape"],
+    [new Response(JSON.stringify(success(input, { choices: [{ index: 0, finish_reason: "content_filter", message: { content: "" } }] })), { status: 200 }), "policy", undefined],
+    [new Response(JSON.stringify(success(input, { choices: [{ index: 0, finish_reason: "length", message: { content: "{}" } }] })), { status: 200 }), "malformed-response", "finish-length"],
+    [new Response(JSON.stringify(success(input, { choices: [] })), { status: 200 }), "malformed-response", "response-shape"],
+    [new Response("x", { status: 200, headers: { "content-length": String(4 * 1024 * 1024 + 1) } }), "malformed-response", undefined],
   ];
-  for (const [response, category] of cases) {
+  for (const [response, category, providerCode] of cases) {
     const adapter = new DeepSeekProvider({ fetchImpl: async () => response });
-    await assert.rejects(adapter.invoke(input, { credential: "fixture" }), (error) => error.category === category && !error.retryable);
+    await assert.rejects(adapter.invoke(input, { credential: "fixture" }), (error) => error.category === category
+      && !error.retryable && error.providerCode === providerCode);
   }
 });
 
 test("DeepSeek usage, HTTP, disconnect, cancellation and credentials fail closed without secret leakage", async () => {
   const input = request(1);
   const badUsage = success(input, { usage: { prompt_tokens: 30, prompt_cache_hit_tokens: 8, prompt_cache_miss_tokens: 23, completion_tokens: 12, total_tokens: 42 } });
-  await assert.rejects(new DeepSeekProvider({ fetchImpl: async () => new Response(JSON.stringify(badUsage), { status: 200 }) }).invoke(input, { credential: "fixture" }), (error) => error.category === "malformed-response");
+  await assert.rejects(new DeepSeekProvider({ fetchImpl: async () => new Response(JSON.stringify(badUsage), { status: 200 }) }).invoke(input, { credential: "fixture" }),
+    (error) => error.category === "malformed-response" && error.providerCode === "usage-shape");
   const secret = `DEEPSEEK-SECRET-${randomUUID()}`;
   const matrix = [[401, "auth", false], [403, "auth", false], [429, "rate-limit", true], [408, "timeout", true], [504, "timeout", true], [500, "provider", true], [400, "policy", false]];
   for (const [status, category, retryable] of matrix) {
