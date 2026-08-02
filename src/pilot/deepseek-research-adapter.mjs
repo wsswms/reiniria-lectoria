@@ -2,6 +2,7 @@ export const DEEPSEEK_RESEARCH_PROVIDER_ID = "deepseek-research";
 export const DEEPSEEK_RESEARCH_ADAPTER_VERSION = "deepseek-research-v1";
 const ORIGIN = "https://api.deepseek.com";
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const V4_FLASH_MAX_OUTPUT_TOKENS = 384_000;
 const STATUS = new Set(["supported", "partial", "insufficient", "disputed"]);
 
 export class DeepSeekResearchError extends Error {
@@ -12,13 +13,17 @@ const fail = (category, retryable = false, code) => new DeepSeekResearchError(ca
 function exact(input, keys, name) { if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !keys.includes(key))) throw fail("malformed-response"); }
 function bounded(value, maximum = 65_536) { if (typeof value !== "string" || value.trim().length === 0 || value.length > maximum) throw fail("malformed-response"); return value; }
 function requestContract(input) {
-  exact(input, ["modelId", "questions", "evidence", "maxOutputTokens"], "request");
+  exact(input, ["modelId", "questions", "evidence", "maxOutputTokens", "thinkingMode"], "request");
+  const thinkingMode = input.thinkingMode ?? "disabled";
+  const maximumOutputTokens = input.modelId === "deepseek-v4-flash" ? V4_FLASH_MAX_OUTPUT_TOKENS : 2_048;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.modelId) || !Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > 10
-    || !Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 20 || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > 2_048) throw fail("malformed-response");
+    || !new Set(["disabled", "enabled"]).has(thinkingMode) || !Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 20
+    || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > maximumOutputTokens) throw fail("malformed-response");
   const ids = new Set();
   const evidence = input.evidence.map((item) => { exact(item, ["observationId", "url", "title", "content"], "evidence"); const observationId = bounded(item.observationId, 255);
     if (ids.has(observationId)) throw fail("malformed-response"); ids.add(observationId); return Object.freeze({ observationId, url: new URL(item.url).toString(), title: bounded(item.title, 2_048), content: bounded(item.content, 262_144) }); });
-  return Object.freeze({ modelId: input.modelId, questions: Object.freeze(input.questions.map((item) => bounded(item, 512))), evidence: Object.freeze(evidence), maxOutputTokens: input.maxOutputTokens });
+  return Object.freeze({ modelId: input.modelId, questions: Object.freeze(input.questions.map((item) => bounded(item, 512))), evidence: Object.freeze(evidence),
+    maxOutputTokens: input.maxOutputTokens, thinkingMode });
 }
 
 export function buildDeepSeekResearchRequest(input) {
@@ -30,7 +35,7 @@ export function buildDeepSeekResearchRequest(input) {
     "Proposals are optional draft term or knowledge items and are never approvals."].join(" ");
   return Object.freeze({ url: `${ORIGIN}/chat/completions`, body: Object.freeze({ model: request.modelId,
     messages: [{ role: "system", content: instruction }, { role: "user", content: JSON.stringify({ questions: request.questions, evidence: request.evidence }) }],
-    response_format: { type: "json_object" }, thinking: { type: "disabled" }, max_tokens: request.maxOutputTokens, stream: false }) });
+    response_format: { type: "json_object" }, thinking: { type: request.thinkingMode }, max_tokens: request.maxOutputTokens, stream: false }) });
 }
 
 function normalizedPayload(value, request) {

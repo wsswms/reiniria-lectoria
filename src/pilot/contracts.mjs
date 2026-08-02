@@ -17,21 +17,25 @@ function integer(value, name, minimum, maximum) {
   return value;
 }
 function language(value, name) { try { return Intl.getCanonicalLocales(string(value, name, 63))[0]; } catch { throw new TypeError(`${name} is invalid`); } }
-function budget(input, name, callMaximum, outputMaximum) {
-  exact(input, ["maxCalls", "maxOutputTokens", "hardLimitMicros"], name);
+function budget(input, name, callMaximum, outputMaximum, { thinking = false } = {}) {
+  exact(input, ["maxCalls", "maxOutputTokens", "hardLimitMicros", ...(thinking ? ["thinkingMode"] : [])], name);
+  const thinkingMode = thinking ? input.thinkingMode ?? "disabled" : undefined;
+  if (thinking && !new Set(["disabled", "enabled"]).has(thinkingMode)) throw new TypeError(`${name}.thinkingMode is invalid`);
   return Object.freeze({ maxCalls: integer(input.maxCalls, `${name}.maxCalls`, 1, callMaximum),
     maxOutputTokens: integer(input.maxOutputTokens, `${name}.maxOutputTokens`, 1, outputMaximum),
-    hardLimitMicros: integer(input.hardLimitMicros, `${name}.hardLimitMicros`, 1, 200_000) });
+    hardLimitMicros: integer(input.hardLimitMicros, `${name}.hardLimitMicros`, 1, 200_000),
+    ...(thinking ? { thinkingMode } : {}) });
 }
 
 export function realArticlePilotConfigContract(input, { allowLive = false } = {}) {
   exact(input, ["schemaVersion", "mode", "article", "deepseek", "brave", "fetch", "research", "output", "totalHardLimitMicros"], "config");
   if (input.schemaVersion !== "lectoria-real-article-pilot-v1") throw new TypeError("config version is invalid");
   if (!new Set(["dry-run", "live"]).has(input.mode) || (input.mode === "live" && !allowLive)) throw new TypeError("live mode is not allowed");
-  exact(input.article, ["path", "digest", "format", "sourceLanguage", "targetLanguage"], "article");
+  exact(input.article, ["path", "digest", "format", "sourceLanguage", "targetLanguage", "title"], "article");
   if (!SHA256.test(input.article.digest) || input.article.format !== "text") throw new TypeError("article boundary is invalid");
   const article = Object.freeze({ path: absolute(input.article.path, "article.path"), digest: input.article.digest, format: "text",
-    sourceLanguage: language(input.article.sourceLanguage, "article.sourceLanguage"), targetLanguage: language(input.article.targetLanguage, "article.targetLanguage") });
+    sourceLanguage: language(input.article.sourceLanguage, "article.sourceLanguage"), targetLanguage: language(input.article.targetLanguage, "article.targetLanguage"),
+    title: input.article.title === undefined ? "Real article pilot" : string(input.article.title, "article.title", 1_024) });
 
   exact(input.deepseek, ["modelId", "credentialPath", "origin", "pricing", "translation", "research"], "deepseek");
   if (input.deepseek.origin !== DEEPSEEK_ORIGIN) throw new TypeError("deepseek origin is invalid");
@@ -43,7 +47,8 @@ export function realArticlePilotConfigContract(input, { allowLive = false } = {}
     cachedInputMicrosPerMillion: integer(input.deepseek.pricing.cachedInputMicrosPerMillion, "deepseek.pricing.cachedInputMicrosPerMillion", 0, 10_000_000) });
   const deepseek = Object.freeze({ modelId: input.deepseek.modelId, credentialPath: absolute(input.deepseek.credentialPath, "deepseek.credentialPath"),
     origin: DEEPSEEK_ORIGIN, pricing, translation: budget(input.deepseek.translation, "deepseek.translation", 20, 1_024),
-    research: budget(input.deepseek.research, "deepseek.research", 10, 2_048) });
+    research: budget(input.deepseek.research, "deepseek.research", 10,
+      input.deepseek.modelId === "deepseek-v4-flash" ? 384_000 : 2_048, { thinking: true }) });
 
   exact(input.brave, ["credentialPath", "maxCalls", "costMicrosPerCall", "hardLimitMicros", "country", "searchLanguage", "maxResultsPerSearch"], "brave");
   const brave = Object.freeze({ credentialPath: absolute(input.brave.credentialPath, "brave.credentialPath"),

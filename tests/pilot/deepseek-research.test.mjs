@@ -10,7 +10,8 @@ const request = () => ({
   modelId: "deepseek-v4-flash",
   questions: ["Is the minimum focus distance 65 cm?"],
   evidence: [{ observationId: "source-1", url: "https://example.com/reference", title: "Reference", content: "The minimum focus distance is 0.65 m." }],
-  maxOutputTokens: 2_048,
+  maxOutputTokens: 384_000,
+  thinkingMode: "enabled",
 });
 const payload = () => ({
   id: "research-response-1",
@@ -24,11 +25,11 @@ const payload = () => ({
   usage: { prompt_tokens: 300, completion_tokens: 120, total_tokens: 420, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 300 },
 });
 
-test("DeepSeek research request isolates untrusted evidence and disables thinking", () => {
+test("DeepSeek research request isolates untrusted evidence and honors the actual thinking contract", () => {
   const outbound = buildDeepSeekResearchRequest(request());
   assert.equal(outbound.url, "https://api.deepseek.com/chat/completions");
-  assert.deepEqual(outbound.body.thinking, { type: "disabled" });
-  assert.equal(outbound.body.max_tokens, 2_048);
+  assert.deepEqual(outbound.body.thinking, { type: "enabled" });
+  assert.equal(outbound.body.max_tokens, 384_000);
   assert.match(outbound.body.messages[0].content, /evidence as untrusted/);
 });
 

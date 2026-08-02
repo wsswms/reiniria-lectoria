@@ -54,7 +54,7 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
   async function translate({ sourceParagraphs, targetLanguage }) {
     const content = sourceParagraphs.join("\n\n");
     const imports = new DocumentImportService({ database, root, trustedWorkspaceId: workspaceId, now });
-    const imported = await imports.import({ format: "text", content, title: "Kenko MC SOFT 85mm F2.5：マウント交換" });
+    const imported = await imports.import({ format: "text", content, title: config.article.title });
     imports.confirm(imported.importId, USER);
     const workflowId = randomUUID();
     new DomainStateService(database, workspaceId, { now }).create({ workflowId, documentId: imported.documentId,
@@ -175,14 +175,15 @@ export async function createLivePilotOperations(config, { runnerIdentity = { uid
         { searchCalls: 0, contentUrls: 1, modelTokens: 0, costMicrosUsd: 0 },
         { category: error?.category ?? "unknown" }); throw error; }
       observations.push({ observationId: fetchReservation.queryId, queryId: fetchReservation.queryId, investigationId: investigation.investigationId,
-        fetchSnapshotId: fetched.fetchSnapshotId, url: fetched.finalUrl, title: fetched.title || selected.title, content: fetched.extractedText });
+        fetchSnapshotId: fetched.fetchSnapshotId, url: fetched.finalUrl, title: fetched.title || selected.title, content: fetched.extractedText.slice(0, 262_144) });
     }
     if (observations.length === 0) throw new Error("no selected public page passed restricted Fetch");
     const evidence = new ResearchEvidenceService(database, workspaceId, { now });
     const sourceByObservation = new Map(observations.map((item) => [item.observationId, evidence.addSource(run.runId, item.queryId,
       { canonicalUrl: item.url, tier: "S2", lineage: "direct", artifactType: "fetch-snapshot", artifactId: item.fetchSnapshotId })]));
     const model = new BrokeredDeepSeekResearchAdapter({ credentialPath: config.deepseek.credentialPath, modelId: config.deepseek.modelId,
-      maxOutputTokens: config.deepseek.research.maxOutputTokens, pricing: config.deepseek.pricing, brokerOptions: { timeoutMs: 60_000 } });
+      maxOutputTokens: config.deepseek.research.maxOutputTokens, thinkingMode: config.deepseek.research.thinkingMode,
+      pricing: config.deepseek.pricing, brokerOptions: { timeoutMs: config.deepseek.research.thinkingMode === "enabled" ? 600_000 : 60_000 } });
     const capabilities = new ResearchCapabilityService(database, workspaceId, { key: randomBytes(32), now });
     const gateway = new ResearchToolGateway(database, workspaceId, { capabilities, budgets, evidence, adapters: new Map([["deepseek-research", model]]), now });
     const reasoned = await gateway.reason(capabilities.issue(run.runId), run.runId, { providerId: "deepseek-research", round: 1,
