@@ -25,6 +25,9 @@ test("DeepSeek role adapter fixes the M5C planner and QA origin prompt bounds an
     assert.equal(outbound.body.model, "deepseek-v4-flash"); assert.deepEqual(outbound.body.thinking, { type: "disabled" });
     assert.equal(outbound.body.temperature, 0); assert.equal(outbound.body.max_tokens, 2_048); assert.equal(outbound.body.stream, false);
   }
+  assert.deepEqual(buildM5CDeepSeekRoleRequest({ ...qa, thinking: "enabled" }).body.thinking, { type: "enabled" });
+  assert.throws(() => buildM5CDeepSeekRoleRequest({ ...qa, thinking: "automatic" }), /M5C DeepSeek role invocation failed/);
+  assert.throws(() => buildM5CDeepSeekRoleRequest({ ...planner, thinking: "enabled" }), /M5C DeepSeek role invocation failed/);
   assert.deepEqual(M5C_DEEPSEEK_PRICING, { version: "deepseek-v4-flash-2026-08-03-conservative-cny-v1", sourceCurrency: "USD",
     inputUsdPerMillion: 0.14, outputUsdPerMillion: 0.28, cnyPerUsdCeiling: 10, peakMultiplierCeiling: 2 });
 });

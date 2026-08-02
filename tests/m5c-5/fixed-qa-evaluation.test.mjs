@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { detectM5CQAIssues } from "../../src/m5c/qa-service.mjs";
-import { m5cQaEvaluationCorpus as cases } from "../fixtures/m5c-5/qa-evaluation-corpus.mjs";
+import { m5cQaEvaluationCorpus as cases, m5cQaThinkingComparisonCorpus } from "../fixtures/m5c-5/qa-evaluation-corpus.mjs";
 
 test("fixed QA corpus spans three directions domains and short-medium-long articles", () => {
   assert.equal(cases.length, 12);
   assert.deepEqual([...new Set(cases.map((item) => item.direction))].sort(), ["en->zh-CN", "ja->zh-CN", "zh-CN->en"]);
   assert.deepEqual([...new Set(cases.map((item) => item.domain))].sort(), ["camera", "science", "software"]);
   assert.deepEqual([...new Set(cases.map((item) => item.length))].sort(), ["long", "medium", "short"]);
+});
+
+test("thinking comparison fixes ten paired cases across directions domains lengths and controls", () => {
+  assert.equal(m5cQaThinkingComparisonCorpus.length, 10);
+  assert.deepEqual(new Set(m5cQaThinkingComparisonCorpus.map((item) => item.direction)), new Set(["ja->zh-CN", "en->zh-CN", "zh-CN->en"]));
+  assert.deepEqual(new Set(m5cQaThinkingComparisonCorpus.map((item) => item.domain)), new Set(["camera", "software", "science"]));
+  assert.deepEqual(new Set(m5cQaThinkingComparisonCorpus.map((item) => item.length)), new Set(["short", "medium", "long"]));
+  assert.equal(m5cQaThinkingComparisonCorpus.filter((item) => item.labels.length > 0).length, 6);
+  assert.equal(m5cQaThinkingComparisonCorpus.filter((item) => item.labels.length === 0).length, 4);
 });
 
 test("fixed invariant and heuristic QA reaches perfect labeled precision and recall with zero critical escape", () => {

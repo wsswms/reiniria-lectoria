@@ -2,6 +2,7 @@ const ORIGIN = "https://api.deepseek.com";
 const ROLES = new Set(["planner", "qa"]);
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_OUTPUT_TOKENS = 16_384;
+const THINKING_MODES = new Set(["disabled", "enabled"]);
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PLAN_KINDS = new Set(["term", "entity", "fact", "relation", "style", "measurement"]);
@@ -36,13 +37,15 @@ function boundedJson(value, maximum = 256 * 1024) {
 }
 
 function requestContract(input) {
-  exact(input, ["role", "modelId", "request", "maxOutputTokens"], "request-keys");
+  const thinking = input?.thinking ?? "disabled";
+  exact(input, ["role", "modelId", "request", "maxOutputTokens", ...(input?.thinking === undefined ? [] : ["thinking"])], "request-keys");
   if (!ROLES.has(input.role) || !MODEL_ID.test(input.modelId ?? "") || !Number.isSafeInteger(input.maxOutputTokens)
-    || input.maxOutputTokens < 1 || input.maxOutputTokens > MAX_OUTPUT_TOKENS) throw fail("policy");
+    || input.maxOutputTokens < 1 || input.maxOutputTokens > MAX_OUTPUT_TOKENS || !THINKING_MODES.has(thinking)
+    || (thinking === "enabled" && input.role !== "qa")) throw fail("policy");
   const request = boundedJson(input.request, 2 * 1024 * 1024);
   if ((input.role === "planner" && request.schemaVersion !== "m5c-planner-request-v1")
     || (input.role === "qa" && request.schemaVersion !== "m5c-model-qa-request-v1")) throw fail("policy");
-  return Object.freeze({ role: input.role, modelId: input.modelId, request, maxOutputTokens: input.maxOutputTokens });
+  return Object.freeze({ role: input.role, modelId: input.modelId, request, maxOutputTokens: input.maxOutputTokens, thinking });
 }
 
 function instruction(role) {
@@ -73,7 +76,7 @@ export function buildM5CDeepSeekRoleRequest(input) {
   const request = requestContract(input);
   return Object.freeze({ url: `${ORIGIN}/chat/completions`, body: Object.freeze({ model: request.modelId,
     messages: [{ role: "system", content: instruction(request.role) }, { role: "user", content: JSON.stringify(request.request) }],
-    response_format: { type: "json_object" }, thinking: { type: "disabled" }, temperature: 0, max_tokens: request.maxOutputTokens, stream: false }) });
+    response_format: { type: "json_object" }, thinking: { type: request.thinking }, temperature: 0, max_tokens: request.maxOutputTokens, stream: false }) });
 }
 
 function usage(input) {
