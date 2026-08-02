@@ -1,5 +1,6 @@
 const ORIGIN = "https://api.deepseek.com";
 const MODES = new Set(["disabled", "enabled"]);
+export const DEEPSEEK_V4_FLASH_MAX_OUTPUT_TOKENS = 384_000;
 
 function exact(input, keys, name) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !keys.includes(key))) throw new TypeError(`${name} is invalid`);
@@ -11,8 +12,9 @@ function text(value, name, maximum) {
 
 export function deepSeekThinkingComparisonRequestContract(input) {
   exact(input, ["modelId", "questions", "evidence", "maxOutputTokens", "thinkingMode"], "comparison request");
+  const maximumOutputTokens = input.modelId === "deepseek-v4-flash" ? DEEPSEEK_V4_FLASH_MAX_OUTPUT_TOKENS : 2_048;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.modelId) || !MODES.has(input.thinkingMode)
-    || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > 2_048
+    || !Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > maximumOutputTokens
     || !Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > 10
     || !Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 20) throw new TypeError("comparison request is invalid");
   const questions = input.questions.map((item) => text(item, "question", 512));
