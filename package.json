@@ -50,7 +50,8 @@
     "preflight:real-article-pilot": "node scripts/preflight-real-article-pilot.mjs",
     "exercise:real-article-pilot": "node scripts/run-real-article-pilot.mjs",
     "smoke:real-article-translation": "node scripts/smoke-real-article-translation.mjs",
-    "exercise:real-article-translation": "node scripts/run-real-article-translation.mjs"
+    "exercise:real-article-translation": "node scripts/run-real-article-translation.mjs",
+    "exercise:deepseek-thinking-comparison": "node scripts/run-deepseek-thinking-comparison.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
