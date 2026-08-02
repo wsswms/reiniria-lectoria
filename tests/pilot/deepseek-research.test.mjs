@@ -30,7 +30,9 @@ test("DeepSeek research request isolates untrusted evidence and honors the actua
   assert.equal(outbound.url, "https://api.deepseek.com/chat/completions");
   assert.deepEqual(outbound.body.thinking, { type: "enabled" });
   assert.equal(outbound.body.max_tokens, 384_000);
-  assert.match(outbound.body.messages[0].content, /evidence as untrusted/);
+  assert.match(outbound.body.messages[0].content, /exact contiguous substring/);
+  assert.match(outbound.body.messages[0].content, /Required shape:/);
+  assert.match(outbound.body.messages[0].content, /byte-for-byte/);
 });
 
 test("DeepSeek research response is strict, cited and usage-normalized", () => {
