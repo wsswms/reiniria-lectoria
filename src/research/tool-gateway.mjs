@@ -59,16 +59,18 @@ export class ResearchToolGateway {
     this.capabilities.verify(token, { runId, tool: "submit-report", capability: "research-model", providerId: input.providerId });
     const adapter = this.#adapter(input.providerId, "reason");
     const estimatedTokens = Math.max(1, Math.ceil(input.prompt.length / 4));
+    const estimate = typeof adapter.estimateReason === "function" ? adapter.estimateReason(input)
+      : { searchCalls: 0, contentUrls: 0, modelTokens: estimatedTokens, costMicrosUsd: 0 };
     const reservation = this.budgets.reserve(runId, { round: input.round, capability: "research-model", providerId: input.providerId,
       query: "structured-research-reasoning", language: input.language, country: input.country, idempotencyKey: input.idempotencyKey,
-      estimate: { searchCalls: 0, contentUrls: 0, modelTokens: estimatedTokens, costMicrosUsd: 0 } });
+      estimate });
     if (reservation.entries.length !== 1 || reservation.entries[0].entryType !== "reserved") throw new ResearchConflictError("terminal tool receipt cannot execute twice");
     try {
       const response = await adapter.reason({ prompt: input.prompt, fixture: input.fixture });
       this.budgets.settle(reservation.queryId, response.usage, { adapterVersion: response.adapterVersion });
       return response;
     } catch (error) {
-      this.budgets.unknown(reservation.queryId, { searchCalls: 0, contentUrls: 0, modelTokens: estimatedTokens, costMicrosUsd: 0 }, { category: error?.category ?? "unknown" });
+      this.budgets.unknown(reservation.queryId, estimate, { category: error?.category ?? "unknown" });
       throw error;
     }
   }

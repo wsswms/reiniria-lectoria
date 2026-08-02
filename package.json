@@ -33,7 +33,8 @@
     "test:m5r.3": "node --test tests/m5r-3/*.test.mjs",
     "test:m5r.4a": "node --test tests/m5r-4a/*.test.mjs",
     "test:m5r.5": "node --test tests/m5r-5/*.test.mjs",
-    "test": "npm run test:m2.1 && npm run test:m2.2 && npm run test:m2.3 && npm run test:m2.4 && npm run test:m2.5 && npm run test:m3.1 && npm run test:m3.2 && npm run test:m3.3 && npm run test:m3.4 && npm run test:m3.5 && npm run test:m4.1 && npm run test:m4.2 && npm run test:m4.3 && npm run test:m4.4 && npm run test:m4.5 && npm run test:m5.1 && npm run test:m5.2 && npm run test:m5.3 && npm run test:m5.4 && npm run test:m5.5 && npm run test:m5.6 && npm run test:m5r.1 && npm run test:m5r.2 && npm run test:m5r.3 && npm run test:m5r.4a && npm run test:m5r.5",
+    "test:pilot": "node --test tests/pilot/*.test.mjs",
+    "test": "npm run test:m2.1 && npm run test:m2.2 && npm run test:m2.3 && npm run test:m2.4 && npm run test:m2.5 && npm run test:m3.1 && npm run test:m3.2 && npm run test:m3.3 && npm run test:m3.4 && npm run test:m3.5 && npm run test:m4.1 && npm run test:m4.2 && npm run test:m4.3 && npm run test:m4.4 && npm run test:m4.5 && npm run test:m5.1 && npm run test:m5.2 && npm run test:m5.3 && npm run test:m5.4 && npm run test:m5.5 && npm run test:m5.6 && npm run test:m5r.1 && npm run test:m5r.2 && npm run test:m5r.3 && npm run test:m5r.4a && npm run test:m5r.5 && npm run test:pilot",
     "compare:sqlite": "node scripts/compare-sqlite-options.mjs",
     "measure:m2.1": "node scripts/measure-m2-1.mjs",
     "measure:m2.2": "node scripts/measure-m2-2.mjs",
@@ -45,7 +46,11 @@
     "exercise:m4.5:real": "node scripts/run-real-provider-exercise.mjs",
     "exercise:m5.5:brave-real": "node scripts/run-real-brave-search.mjs",
     "preflight:m5r.4a:brave-real": "node scripts/preflight-real-brave-research.mjs",
-    "exercise:m5r.4a:brave-real": "node scripts/run-real-brave-research.mjs"
+    "exercise:m5r.4a:brave-real": "node scripts/run-real-brave-research.mjs",
+    "preflight:real-article-pilot": "node scripts/preflight-real-article-pilot.mjs",
+    "exercise:real-article-pilot": "node scripts/run-real-article-pilot.mjs",
+    "smoke:real-article-translation": "node scripts/smoke-real-article-translation.mjs",
+    "exercise:real-article-translation": "node scripts/run-real-article-translation.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
