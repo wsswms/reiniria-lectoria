@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle } from "../../scripts/m5c-real-article-batch.mjs";
+import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle, validatePart2ContinuationManifest } from "../../scripts/m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "../../scripts/m5c-real-article-audit.mjs";
 import { auditWriterForDescriptor } from "../../src/provider/llm-call-audit.mjs";
 
@@ -53,4 +54,18 @@ test("real article audit session writes per-call 0600 JSONL and an incremental d
     assert.equal(summary.entries[1].status, "failed"); assert.match(summary.manifestDigest, /^sha256:[0-9a-f]{64}$/u);
     const manifest = JSON.parse(await readFile(join(output, "llm-audit-manifest.json"), "utf8")); assert.equal(manifest.entries.length, 2);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("part2 continuation accepts only the exact complete 57-call part1 role matrix and digest", () => {
+  const hex = "0".repeat(64); const entries = [];
+  const add = (role, thinking, count) => { for (let index = 0; index < count; index += 1) entries.push({ sequence: entries.length + 1,
+    articleId: "nikon-omoshiro-part1", role, thinking, status: "completed", eventCount: 2, normalized: true,
+    inputDigest: `sha256:${hex}`, outputDigest: `sha256:${hex}`, fileDigest: `sha256:${hex}` }); };
+  add("planner", "disabled", 1); add("translation", "disabled", 54); add("qa", "disabled", 1); add("qa", "enabled", 1);
+  const content = JSON.stringify({ schemaVersion: "m5c-real-article-llm-audit-manifest-v1", entries });
+  const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+  assert.equal(validatePart2ContinuationManifest(content, digest).calls, 57);
+  assert.throws(() => validatePart2ContinuationManifest(content, `sha256:${"1".repeat(64)}`), /digest/);
+  const incomplete = JSON.stringify({ schemaVersion: "m5c-real-article-llm-audit-manifest-v1", entries: entries.map((entry, index) => index ? entry : { ...entry, normalized: false }) });
+  assert.throws(() => validatePart2ContinuationManifest(incomplete, `sha256:${createHash("sha256").update(incomplete).digest("hex")}`), /incomplete/);
 });

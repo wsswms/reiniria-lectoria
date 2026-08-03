@@ -7,6 +7,7 @@ export const REAL_ARTICLES = Object.freeze([
 ]);
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 
 export async function readPrivateArticle(path) {
   if (typeof path !== "string" || path.length === 0) throw new Error("real article path is required");
@@ -35,4 +36,26 @@ export function pairedQaSummary(mode, run, settlement) {
   return Object.freeze({ mode, qaRunId: run.qaRunId, targetRevisionId: run.targetRevisionId, current: run.current,
     findings: Object.freeze(run.findings.map(({ layer, severity, code, segmentId, details, blocking }) =>
       Object.freeze({ layer, severity, code, segmentId, details, blocking }))), usage: Object.freeze({ ...settlement.usage }) });
+}
+
+export function validatePart2ContinuationManifest(content, expectedDigest) {
+  if (typeof content !== "string" || !SHA256.test(expectedDigest ?? "") || sha(content) !== expectedDigest) throw new Error("continuation manifest digest mismatch");
+  let manifest; try { manifest = JSON.parse(content); } catch { throw new Error("continuation manifest is invalid"); }
+  if (manifest?.schemaVersion !== "m5c-real-article-llm-audit-manifest-v1" || !Array.isArray(manifest.entries) || manifest.entries.length !== 57) {
+    throw new Error("continuation manifest call count is invalid");
+  }
+  for (const [index, entry] of manifest.entries.entries()) {
+    if (entry?.sequence !== index + 1 || entry.articleId !== "nikon-omoshiro-part1" || entry.status !== "completed" || entry.eventCount !== 2
+      || entry.normalized !== true || !SHA256.test(entry.inputDigest ?? "") || !SHA256.test(entry.outputDigest ?? "") || !SHA256.test(entry.fileDigest ?? "")) {
+      throw new Error("continuation manifest contains an incomplete call");
+    }
+  }
+  const roles = Object.fromEntries(["planner", "translation", "qa"].map((role) => [role, manifest.entries.filter((entry) => entry.role === role)]));
+  if (roles.planner.length !== 1 || roles.translation.length !== 54 || roles.qa.length !== 2
+    || roles.planner[0].thinking !== "disabled" || roles.translation.some((entry) => entry.thinking !== "disabled")
+    || new Set(roles.qa.map((entry) => entry.thinking)).size !== 2
+    || !roles.qa.some((entry) => entry.thinking === "disabled") || !roles.qa.some((entry) => entry.thinking === "enabled")) {
+    throw new Error("continuation manifest role matrix is invalid");
+  }
+  return Object.freeze({ digest: expectedDigest, calls: 57, plannerCalls: 1, translationCalls: 54, qaCalls: 2 });
 }

@@ -16,7 +16,7 @@ import { invokeM5CModelBroker } from "../src/m5c/model-broker-process.mjs";
 import { ValidationService } from "../src/translation/validator.mjs";
 import { WorkCopyService } from "../src/translation/work-copy-service.mjs";
 import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
-import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle } from "./m5c-real-article-batch.mjs";
+import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle, validatePart2ContinuationManifest } from "./m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
 import { REAL_ARTICLE_EVALUATION_SCOPE, REAL_ARTICLE_MAX_OUTPUT_TOKENS, REAL_ARTICLE_MAX_RESPONSE_BYTES } from "../src/provider/llm-call-audit.mjs";
 
@@ -26,6 +26,7 @@ const MODEL_ID = "deepseek-v4-flash";
 const PRICING_VERSION = "deepseek-v4-flash-2026-08-03-conservative-cny-v1";
 const MODES = Object.freeze(["disabled", "enabled"]);
 const TRANSLATION_OUTPUT_TOKENS = 16_384;
+const PART1_MANIFEST_DIGEST = "sha256:78bd16f63851ef12d94bc563e8942c9d9368db474c50a204ce9ebd5b4a221593";
 const FIXED = Object.freeze({
   "nikon-omoshiro-part1": Object.freeze({ digest: "sha256:3a94942c23690d11c7a61527e3778c61fc557cb6a1af2596d40d57ae33d6fc5d", segmentCount: 54 }),
   "nikon-omoshiro-part2": Object.freeze({ digest: "sha256:fb274eb8b2d77f63a15bb28128353de042a196589a535992721a6789336c7945", segmentCount: 62 }),
@@ -84,13 +85,18 @@ try {
   const outputRoot = await privateOutputDirectory(process.env.M5C_REAL_ARTICLE_OUTPUT_DIR);
   audit = await RealArticleAuditSession.create(outputRoot);
   credential = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE);
+  const continuationMode = process.env.M5C_REAL_ARTICLE_CONTINUATION;
+  if (continuationMode !== undefined && continuationMode !== "part2-after-audited-part1-v1") throw new Error("real article continuation mode is invalid");
+  const prior = continuationMode ? validatePart2ContinuationManifest(
+    (await readPrivateArticle(process.env.M5C_REAL_ARTICLE_PRIOR_MANIFEST)).content, PART1_MANIFEST_DIGEST) : null;
   const sources = [];
   for (const article of REAL_ARTICLES) {
     const source = await readPrivateArticle(process.env[article.env]); const fixed = FIXED[article.id];
     if (source.digest !== fixed.digest) throw new Error("real article digest changed after preflight"); sources.push({ article, source, fixed });
   }
   const maximums = batchLimits(sources.map(({ fixed }) => fixed));
-  for (const { article, source, fixed } of sources) {
+  const selectedSources = continuationMode ? sources.filter(({ article }) => article.id === "nikon-omoshiro-part2") : sources;
+  for (const { article, source, fixed } of selectedSources) {
     currentDocumentId = article.id; stage = "workspace"; const fixture = await applicationWorkspace(`lectoria-${article.id}-real-`);
     try {
       progress(article.id, "started");
@@ -185,6 +191,8 @@ try {
   const auditSummary = await audit.summary();
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-article-batch-result-v1", status: "completed-awaiting-user-disposition",
     documents: completed, maximums, audit: { calls: auditSummary.calls, manifestDigest: auditSummary.manifestDigest },
+    continuation: prior ? { mode: continuationMode, prior, repeatedProviderCalls: 0,
+      cumulativeNewCalls: prior.calls + auditSummary.calls } : null,
     rawResponsesRetained: true, reasoningRetained: true, approvalPerformed: false,
     riskAcceptancePerformed: false, exportPerformed: false })}\n`);
 } catch (error) {
