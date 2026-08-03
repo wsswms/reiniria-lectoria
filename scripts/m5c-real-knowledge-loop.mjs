@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { DEFAULT_FLOW_BUDGET } from "../src/m5c/contracts.mjs";
+import { M5C_PLANNER_MALFORMED_RETRIES } from "../src/m5c/deepseek-role-adapter.mjs";
 
 export const KNOWLEDGE_LOOP_ARTICLES = Object.freeze({
   "nikon-omoshiro-part1": Object.freeze({ query: "site:nij.nikon.com ニコン おもしろレンズ工房 ぐぐっと ふわっと",
@@ -76,13 +77,13 @@ export function expandedKnowledgeLoopRecoveryPolicy(policy, category, usage) {
 export function knowledgeLoopArticleBudget(segmentCount) {
   if (!Number.isSafeInteger(segmentCount) || segmentCount < 1 || segmentCount > 128) throw new TypeError("segment count is invalid");
   const zero = Object.freeze({ maxCalls: 0, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 0 });
-  return Object.freeze({ ...DEFAULT_FLOW_BUDGET, maxCalls: segmentCount + 22, maxInputTokens: 3_000_000,
-    maxOutputTokens: ROLE_OUTPUT_TOKENS * 2 + (segmentCount + MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE) * TRANSLATION_OUTPUT_TOKENS,
+  return Object.freeze({ ...DEFAULT_FLOW_BUDGET, maxCalls: segmentCount + 23, maxInputTokens: 3_150_000,
+    maxOutputTokens: ROLE_OUTPUT_TOKENS * 3 + (segmentCount + MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE) * TRANSLATION_OUTPUT_TOKENS,
     maxCostMicrosCny: 50_000_000, maxCostMicrosUsd: 2_000_000, maxDurationMs: 20_000_000,
     maxResearchCycles: 2, maxQaCycles: 1, maxRetranslations: 1, maxUnknownOutcomes: 1,
     categories: Object.freeze({
-      planner: Object.freeze({ maxCalls: 1, maxInputTokens: 150_000, maxOutputTokens: ROLE_OUTPUT_TOKENS,
-        maxCostMicrosCny: 5_000_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
+      planner: Object.freeze({ maxCalls: 2, maxInputTokens: 300_000, maxOutputTokens: ROLE_OUTPUT_TOKENS * 2,
+        maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: 1_200_000 }),
       search: Object.freeze({ maxCalls: MAX_RESEARCH_CALLS_PER_ARTICLE, maxInputTokens: 0, maxOutputTokens: 0,
         maxCostMicrosCny: 0, maxCostMicrosUsd: 1_000_000, maxDurationMs: 120_000 }),
       fetch: zero, research: zero,
@@ -99,9 +100,11 @@ export function knowledgeLoopArticleBudget(segmentCount) {
 export function knowledgeLoopLimits() {
   const translationCalls = Object.values(KNOWLEDGE_LOOP_ARTICLES).reduce((sum, article) => sum + article.segmentCount, 0);
   const maximumUserConfirmedMalformedRecoveries = Object.keys(KNOWLEDGE_LOOP_ARTICLES).length * MAX_USER_CONFIRMED_MALFORMED_RECOVERIES_PER_ARTICLE;
-  return Object.freeze({ plannerCalls: 2, initialTranslationCalls: translationCalls, maximumRetranslationCalls: 32, enabledQaCalls: 2,
-    maximumUserConfirmedMalformedRecoveries, maximumDeepSeekCalls: translationCalls + 36 + maximumUserConfirmedMalformedRecoveries, maximumBraveCalls: 4,
-    maximumBraveCostMicrosUsd: 4 * BRAVE_COST_MICROS_USD_PER_CALL, automaticRetries: 0 });
+  const maximumPlannerMalformedRetries = Object.keys(KNOWLEDGE_LOOP_ARTICLES).length * M5C_PLANNER_MALFORMED_RETRIES;
+  return Object.freeze({ plannerCalls: 2, maximumPlannerMalformedRetries, initialTranslationCalls: translationCalls,
+    maximumRetranslationCalls: 32, enabledQaCalls: 2, maximumUserConfirmedMalformedRecoveries,
+    maximumDeepSeekCalls: translationCalls + 36 + maximumUserConfirmedMalformedRecoveries + maximumPlannerMalformedRetries, maximumBraveCalls: 4,
+    maximumBraveCostMicrosUsd: 4 * BRAVE_COST_MICROS_USD_PER_CALL, automaticRetries: maximumPlannerMalformedRetries });
 }
 
 export function selectOfficialSearchResult(results, expectedHost) {

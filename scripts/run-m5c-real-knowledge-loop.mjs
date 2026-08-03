@@ -194,7 +194,7 @@ try {
             request: { role: "planner", modelId: MODEL_ID, request, maxOutputTokens: ROLE_OUTPUT_TOKENS, thinking: "disabled" } },
           { timeoutMs: 600_000, outputBytes: PRODUCTION_RESPONSE_BYTES_CEILING })) });
       const planned = await planner.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID, idempotencyKey: `${article.id}:planner`,
-        estimatedUsage: estimate(1, 150_000, ROLE_OUTPUT_TOKENS, 5_000_000, 0, 600_000) });
+        estimatedUsage: estimate(2, 300_000, ROLE_OUTPUT_TOKENS * 2, 10_000_000, 0, 1_200_000) });
       if (planned.status !== "model-assisted") throw Object.assign(new Error("Planner did not complete"), { category: planned.category ?? "provider" });
       let plan = plans.submitPlan(workflowId, planned.plan.planHead.version, SYSTEM); plans.decidePlan(workflowId, plan.planHead.version, "approved", USER);
       const needs = new CandidateKnowledgeNeedService(fixture.database, fixture.workspaceId); const plannerNeeds = needs.capturePlan(workflowId);

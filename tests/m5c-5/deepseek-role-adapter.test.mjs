@@ -39,6 +39,9 @@ test("DeepSeek role adapter fixes the M5C planner and QA origin prompt bounds an
     evaluationScope: "m5c-real-article-audit-v1" }), /M5C DeepSeek role invocation failed/);
   assert.deepEqual(M5C_DEEPSEEK_PRICING, { version: "deepseek-v4-flash-2026-08-03-conservative-cny-v1", sourceCurrency: "USD",
     inputUsdPerMillion: 0.14, outputUsdPerMillion: 0.28, cnyPerUsdCeiling: 10, peakMultiplierCeiling: 2 });
+  const plannerInstruction = buildM5CDeepSeekRoleRequest(planner).body.messages[0].content;
+  assert.match(plannerInstruction, /Example JSON:/u); assert.match(plannerInstruction, /merge semantically identical/u);
+  assert.match(plannerInstruction, /Do not copy every local item mechanically/u); assert.match(plannerInstruction, /final non-whitespace character must be \}/u);
 });
 
 test("planner and QA responses are role-bound normalized and charged with the conservative peak ceiling", () => {
@@ -83,6 +86,56 @@ test("role adapter audits full requests raw responses reasoning usage and malfor
     audit: (record) => malformed.push(record) }).invoke(qa, { credential: secret }), (error) => error.category === "malformed-response");
   assert.equal(malformed.length, 2); assert.equal(malformed[1].response.rawBody, "not-json");
   assert.equal(malformed[1].outcome.normalized, false); assert.equal(malformed[1].outcome.error.category, "malformed-response");
+});
+
+test("Planner retries one known malformed JSON response, audits both attempts, and charges their combined usage", async () => {
+  const records = []; let calls = 0;
+  const malformed = response({ items: [] }); malformed.choices[0].message.content = '{"items":[';
+  const valid = response({ items: [{ kind: "term", coverage: "uncovered", instructionType: "warning-only", impact: "high",
+    segmentIds: [segmentId], dependencies: {}, content: { value: "fixture" } }], researchScope: {}, qaProfile: {} });
+  const adapter = new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    calls += 1; return new Response(JSON.stringify(calls === 1 ? malformed : valid), { status: 200 });
+  }, audit: (record) => records.push(record) });
+  const result = await adapter.invoke(planner, { credential: "fixture-secret" });
+  assert.equal(calls, 2); assert.equal(result.items.length, 1);
+  assert.deepEqual(result.usage, { calls: 2, inputTokens: 200, outputTokens: 40, costMicrosCny: 784,
+    costMicrosUsd: 0, durationMs: 0 });
+  assert.deepEqual(records.map((record) => [record.event, record.attempt]), [["request", 1], ["response", 1], ["request", 2], ["response", 2]]);
+  assert.equal(records[1].outcome.error.providerCode, "payload-json"); assert.equal(records[1].outcome.willRetry, true);
+  assert.equal(records[3].outcome.normalized, true);
+});
+
+test("Planner malformed retry is bounded and is not applied to QA or unknown outcomes", async () => {
+  const malformed = response({ items: [] }); malformed.choices[0].message.content = '{"items":[';
+  let plannerCalls = 0;
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    plannerCalls += 1; return new Response(JSON.stringify(malformed), { status: 200 });
+  } }).invoke(planner, { credential: "fixture-secret" }), (error) => error.category === "malformed-response");
+  assert.equal(plannerCalls, 2);
+
+  let qaCalls = 0;
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    qaCalls += 1; return new Response(JSON.stringify(malformed), { status: 200 });
+  } }).invoke(qa, { credential: "fixture-secret" }), (error) => error.category === "malformed-response");
+  assert.equal(qaCalls, 1);
+
+  let unknownCalls = 0;
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    unknownCalls += 1; throw Object.assign(new Error("disconnect"), { cause: { code: "UND_ERR_SOCKET" } });
+  } }).invoke(planner, { credential: "fixture-secret" }), (error) => error.category === "unknown-outcome");
+  assert.equal(unknownCalls, 1);
+
+  let outerMalformedCalls = 0;
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    outerMalformedCalls += 1; return new Response("not-json", { status: 200 });
+  } }).invoke(planner, { credential: "fixture-secret" }), (error) => error.category === "malformed-response");
+  assert.equal(outerMalformedCalls, 1);
+
+  let disabledRetryCalls = 0;
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ plannerMalformedRetries: 0, fetchImpl: async () => {
+    disabledRetryCalls += 1; return new Response(JSON.stringify(malformed), { status: 200 });
+  } }).invoke(planner, { credential: "fixture-secret" }), (error) => error.category === "malformed-response");
+  assert.equal(disabledRetryCalls, 1);
 });
 
 test("M5C model Broker passes private audit fd 4 and records auth failures before any network call", async () => {

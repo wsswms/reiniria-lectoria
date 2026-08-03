@@ -27,9 +27,9 @@ export function batchLimits(documents) {
     if (!Number.isSafeInteger(item.segmentCount) || item.segmentCount < 1 || item.segmentCount > 128) throw new Error("real article segment count is out of bounds");
     return sum + item.segmentCount;
   }, 0);
-  return Object.freeze({ plannerCalls: 2, translationCalls, qaCalls: 4, maximumDeepSeekCalls: translationCalls + 6,
-    priorFailedPlannerCalls: 1, maximumCumulativeDeepSeekCalls: translationCalls + 7,
-    maximumCostMicrosCny: 30_000_000, automaticRetries: 0, braveCalls: 0, fetchCalls: 0, researchModelCalls: 0 });
+  return Object.freeze({ plannerCalls: 2, maximumPlannerMalformedRetries: 2, translationCalls, qaCalls: 4,
+    maximumDeepSeekCalls: translationCalls + 8, priorFailedPlannerCalls: 1, maximumCumulativeDeepSeekCalls: translationCalls + 9,
+    maximumCostMicrosCny: 30_000_000, automaticRetries: 2, braveCalls: 0, fetchCalls: 0, researchModelCalls: 0 });
 }
 
 export function pairedQaSummary(mode, run, settlement) {

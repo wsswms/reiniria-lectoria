@@ -11,9 +11,9 @@ import { auditWriterForDescriptor } from "../../src/provider/llm-call-audit.mjs"
 test("real article batch fixes two same-domain ja to zh-CN inputs and bounded paired QA", () => {
   assert.equal(REAL_ARTICLES.length, 2);
   assert.deepEqual(new Set(REAL_ARTICLES.map((item) => `${item.sourceLanguage}->${item.targetLanguage}`)), new Set(["ja->zh-CN"]));
-  assert.deepEqual(batchLimits([{ segmentCount: 55 }, { segmentCount: 73 }]), { plannerCalls: 2, translationCalls: 128,
-    qaCalls: 4, maximumDeepSeekCalls: 134, priorFailedPlannerCalls: 1, maximumCumulativeDeepSeekCalls: 135,
-    maximumCostMicrosCny: 30_000_000, automaticRetries: 0,
+  assert.deepEqual(batchLimits([{ segmentCount: 55 }, { segmentCount: 73 }]), { plannerCalls: 2, maximumPlannerMalformedRetries: 2,
+    translationCalls: 128, qaCalls: 4, maximumDeepSeekCalls: 136, priorFailedPlannerCalls: 1, maximumCumulativeDeepSeekCalls: 137,
+    maximumCostMicrosCny: 30_000_000, automaticRetries: 2,
     braveCalls: 0, fetchCalls: 0, researchModelCalls: 0 });
   assert.throws(() => batchLimits([{ segmentCount: 55 }, { segmentCount: 129 }]), /out of bounds/);
 });

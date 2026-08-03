@@ -5,10 +5,10 @@ import { flowBudgetPolicyContract } from "../../src/m5c/contracts.mjs";
 import { expandedKnowledgeLoopRecoveryPolicy, knowledgeLoopArticleBudget, knowledgeLoopLimits, RESEARCH_STEP_CODES, researchStepFailure,
   selectOfficialSearchResult, summarizeKnowledgeNeeds } from "../../scripts/m5c-real-knowledge-loop.mjs";
 
-test("real knowledge loop fixes one enabled QA and bounded research and retranslation", () => {
-  assert.deepEqual(knowledgeLoopLimits(), { plannerCalls: 2, initialTranslationCalls: 116, maximumRetranslationCalls: 32,
-    enabledQaCalls: 2, maximumUserConfirmedMalformedRecoveries: 4, maximumDeepSeekCalls: 156,
-    maximumBraveCalls: 4, maximumBraveCostMicrosUsd: 20_000, automaticRetries: 0 });
+test("real knowledge loop fixes one enabled QA and bounded research retranslation and Planner malformed retry", () => {
+  assert.deepEqual(knowledgeLoopLimits(), { plannerCalls: 2, maximumPlannerMalformedRetries: 2, initialTranslationCalls: 116,
+    maximumRetranslationCalls: 32, enabledQaCalls: 2, maximumUserConfirmedMalformedRecoveries: 4, maximumDeepSeekCalls: 158,
+    maximumBraveCalls: 4, maximumBraveCostMicrosUsd: 20_000, automaticRetries: 2 });
 });
 
 test("real knowledge loop article budgets satisfy the production FlowBudget contract", () => {
@@ -52,6 +52,6 @@ test("explicit malformed recovery expands only the selected category and article
   assert.equal(expanded.categories.translation.maxCalls, policy.categories.translation.maxCalls + usage.calls);
   assert.equal(expanded.categories.translation.maxOutputTokens, policy.categories.translation.maxOutputTokens + usage.outputTokens);
   assert.deepEqual(expanded.categories.retranslation, policy.categories.retranslation);
-  assert.equal(policy.maxCalls, 76, "the approved prior policy remains immutable");
+  assert.equal(policy.maxCalls, 77, "the approved prior policy remains immutable");
   assert.throws(() => expandedKnowledgeLoopRecoveryPolicy(policy, "qa", usage), /invalid/);
 });

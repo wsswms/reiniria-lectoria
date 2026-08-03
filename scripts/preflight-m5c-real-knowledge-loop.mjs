@@ -29,7 +29,9 @@ try {
         researchQuery: expected.query, expectedResearchHost: expected.expectedHost });
     } finally { await fixture.close(); }
   }
+  const limits = knowledgeLoopLimits();
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-knowledge-loop-preflight-v1", status: "ready", documents,
-    limits: knowledgeLoopLimits(), providers: { translationPlannerQa: "deepseek-v4-flash", search: "brave-search" },
-    finalQaModes: ["enabled"], fullLlmAudit: true, userRecoveryMode: USER_RECOVERY_MODE, automaticRetries: 0 })}\n`);
+    limits, providers: { translationPlannerQa: "deepseek-v4-flash", search: "brave-search" },
+    finalQaModes: ["enabled"], fullLlmAudit: true, userRecoveryMode: USER_RECOVERY_MODE,
+    automaticRetries: limits.automaticRetries })}\n`);
 } finally { await brave?.close(); await deepseek?.close(); }
