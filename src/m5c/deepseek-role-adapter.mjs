@@ -1,9 +1,10 @@
 import { auditError, evaluationOutputTokens, evaluationResponseBytes, REAL_ARTICLE_EVALUATION_SCOPE, responseHeaders } from "../provider/llm-call-audit.mjs";
+import { PRODUCTION_PROVIDER_OUTPUT_CEILING, PRODUCTION_REQUEST_BYTES_CEILING, PRODUCTION_RESPONSE_BYTES_CEILING } from "./role-policy.mjs";
 
 const ORIGIN = "https://api.deepseek.com";
 const ROLES = new Set(["planner", "qa"]);
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-const MAX_OUTPUT_TOKENS = 16_384;
+const MAX_RESPONSE_BYTES = PRODUCTION_RESPONSE_BYTES_CEILING;
+const MAX_OUTPUT_TOKENS = PRODUCTION_PROVIDER_OUTPUT_CEILING;
 const THINKING_MODES = new Set(["disabled", "enabled"]);
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -47,7 +48,7 @@ function requestContract(input) {
     || input.maxOutputTokens < 1 || input.maxOutputTokens > evaluationOutputTokens(evaluationScope, MAX_OUTPUT_TOKENS)
     || (evaluationScope !== undefined && evaluationScope !== REAL_ARTICLE_EVALUATION_SCOPE) || !THINKING_MODES.has(thinking)
     || (thinking === "enabled" && input.role !== "qa")) throw fail("policy");
-  const request = boundedJson(input.request, 2 * 1024 * 1024);
+  const request = boundedJson(input.request, PRODUCTION_REQUEST_BYTES_CEILING);
   if ((input.role === "planner" && request.schemaVersion !== "m5c-planner-request-v1")
     || (input.role === "qa" && request.schemaVersion !== "m5c-model-qa-request-v1")) throw fail("policy");
   return Object.freeze({ role: input.role, modelId: input.modelId, request, maxOutputTokens: input.maxOutputTokens, thinking,

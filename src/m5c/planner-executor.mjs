@@ -3,6 +3,7 @@ import { budgetUsageContract, contentDigest } from "./contracts.mjs";
 import { FlowPlanService } from "./flow-plan-service.mjs";
 import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
 import { isUncertainProviderOutcome } from "./provider-outcome.mjs";
+import { roleOutputReservation } from "./role-policy.mjs";
 
 export class M5CPlannerExecutor {
   constructor(database, trustedWorkspaceId, { invokePlanner, now = () => new Date(), id = () => randomUUID(), plans = null, budgets = null } = {}) {
@@ -24,8 +25,9 @@ export class M5CPlannerExecutor {
       localPlanDigest: contentDigest(current.plan), localItems: current.plan.items });
     const reservationId = `planner:${idempotencyKey}`;
     this.budgets.reserve(workflowId, "planner", reservationId, budgetUsageContract(estimatedUsage), { providerId, modelId, requestDigest: contentDigest(request) });
-    let response;
-    try { response = await this.invokePlanner(request, { providerId, modelId }); }
+    const segmentCount = new Set(request.localItems.flatMap((item) => item.segmentIds)).size || 1;
+    const reservation = roleOutputReservation({ role: "planner", segmentCount }); let response;
+    try { response = await this.invokePlanner(request, { providerId, modelId, reservation }); }
     catch (error) {
       const category = error?.category ?? "provider";
       if (isUncertainProviderOutcome(category)) {

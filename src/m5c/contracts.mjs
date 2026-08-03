@@ -21,7 +21,7 @@ export const GUIDANCE_ACTIONS = Object.freeze([
 export const DEFAULT_FLOW_BUDGET = Object.freeze({
   maxCalls: 256,
   maxInputTokens: 2_000_000,
-  maxOutputTokens: 250_000,
+  maxOutputTokens: 462_144,
   maxCostMicrosCny: 100_000_000,
   maxCostMicrosUsd: 4_000_000,
   maxDurationMs: 7_200_000,
@@ -30,12 +30,12 @@ export const DEFAULT_FLOW_BUDGET = Object.freeze({
   maxRetranslations: 8,
   maxUnknownOutcomes: 1,
   categories: Object.freeze({
-    planner: Object.freeze({ maxCalls: 8, maxInputTokens: 100_000, maxOutputTokens: 20_000, maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
+    planner: Object.freeze({ maxCalls: 8, maxInputTokens: 100_000, maxOutputTokens: 65_536, maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
     search: Object.freeze({ maxCalls: 100, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 4_000_000, maxDurationMs: 1_800_000 }),
     fetch: Object.freeze({ maxCalls: 50, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 1_800_000 }),
     research: Object.freeze({ maxCalls: 12, maxInputTokens: 300_000, maxOutputTokens: 80_000, maxCostMicrosCny: 15_000_000, maxCostMicrosUsd: 0, maxDurationMs: 1_800_000 }),
     translation: Object.freeze({ maxCalls: 128, maxInputTokens: 1_000_000, maxOutputTokens: 100_000, maxCostMicrosCny: 25_000_000, maxCostMicrosUsd: 0, maxDurationMs: 3_600_000 }),
-    qa: Object.freeze({ maxCalls: 24, maxInputTokens: 400_000, maxOutputTokens: 30_000, maxCostMicrosCny: 25_000_000, maxCostMicrosUsd: 0, maxDurationMs: 1_800_000 }),
+    qa: Object.freeze({ maxCalls: 24, maxInputTokens: 400_000, maxOutputTokens: 196_608, maxCostMicrosCny: 25_000_000, maxCostMicrosUsd: 0, maxDurationMs: 1_800_000 }),
     retranslation: Object.freeze({ maxCalls: 32, maxInputTokens: 200_000, maxOutputTokens: 20_000, maxCostMicrosCny: 15_000_000, maxCostMicrosUsd: 0, maxDurationMs: 1_200_000 }),
   }),
 });

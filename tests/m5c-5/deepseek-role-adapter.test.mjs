@@ -31,7 +31,8 @@ test("DeepSeek role adapter fixes the M5C planner and QA origin prompt bounds an
   assert.deepEqual(buildM5CDeepSeekRoleRequest({ ...qa, thinking: "enabled" }).body.thinking, { type: "enabled" });
   assert.throws(() => buildM5CDeepSeekRoleRequest({ ...qa, thinking: "automatic" }), /M5C DeepSeek role invocation failed/);
   assert.throws(() => buildM5CDeepSeekRoleRequest({ ...planner, thinking: "enabled" }), /M5C DeepSeek role invocation failed/);
-  assert.throws(() => buildM5CDeepSeekRoleRequest({ ...planner, maxOutputTokens: 16_385 }), /M5C DeepSeek role invocation failed/);
+  assert.equal(buildM5CDeepSeekRoleRequest({ ...planner, maxOutputTokens: 65_536 }).body.max_tokens, 65_536);
+  assert.throws(() => buildM5CDeepSeekRoleRequest({ ...planner, maxOutputTokens: 65_537 }), /M5C DeepSeek role invocation failed/);
   assert.equal(buildM5CDeepSeekRoleRequest({ ...planner, maxOutputTokens: 384_000,
     evaluationScope: "m5c-real-article-audit-v1" }).body.max_tokens, 384_000);
   assert.throws(() => buildM5CDeepSeekRoleRequest({ ...planner, maxOutputTokens: 384_001,

@@ -4,6 +4,7 @@ import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
 import { WorkCopyService } from "../translation/work-copy-service.mjs";
 import { isUncertainProviderOutcome } from "./provider-outcome.mjs";
 import { qaMode } from "./finalization.mjs";
+import { roleOutputReservation } from "./role-policy.mjs";
 
 export class ModelQAExecutionError extends Error {
   constructor(message = "model QA execution failed", category = "provider", providerCode) { super(message); this.name = "ModelQAExecutionError"; this.code = "MODEL_QA_EXECUTION_FAILED"; this.category = category;
@@ -33,8 +34,8 @@ export class M5CModelQAExecutor {
         targetDigest: segment.textDigest }))) });
     const reservationId = `qa:${idempotencyKey}`; const estimate = budgetUsageContract(estimatedUsage);
     this.budgets.reserve(workflowId, "qa", reservationId, estimate, { providerId, modelId, requestDigest: contentDigest(request) });
-    let response;
-    try { response = await this.invokeModelQa(request, { providerId, modelId, qaMode: selectedQaMode }); }
+    const reservation = roleOutputReservation({ role: "qa", segmentCount: included.length, qaMode: selectedQaMode }); let response;
+    try { response = await this.invokeModelQa(request, { providerId, modelId, qaMode: selectedQaMode, reservation }); }
     catch (error) {
       const category = error?.category ?? "provider";
       if (isUncertainProviderOutcome(category)) this.budgets.unknown(workflowId, reservationId,

@@ -98,12 +98,13 @@ test("controlled model QA binds a bounded request and settles the article QA bud
   try {
     const copies = ready(fixture); const segment = copies.getBundle(fixture.workflowId).segments[0]; let captured;
     const executor = new M5CModelQAExecutor(fixture.database, fixture.workspaceId, { workCopies: copies,
-      invokeModelQa: async (request) => { captured = request; return { responseId: "fixture-response-1",
+      invokeModelQa: async (request, metadata) => { captured = { request, metadata }; return { responseId: "fixture-response-1",
         findings: [{ segmentId: segment.segmentId, severity: "warning", code: "relation-risk", details: { reason: "fixture" } }],
         usage: { calls: 1, inputTokens: 200, outputTokens: 30, costMicrosCny: 500, costMicrosUsd: 0, durationMs: 25 } }; } });
     const result = await executor.execute(fixture.workflowId, { providerId: "fixture-qa", modelId: "fixture-model", idempotencyKey: "qa-one",
       estimatedUsage: { calls: 1, inputTokens: 500, outputTokens: 100, costMicrosCny: 1_000, costMicrosUsd: 0, durationMs: 100 } });
-    assert.equal(captured.schemaVersion, "m5c-model-qa-request-v1"); assert.equal(captured.workingCopyDigest, copies.getBundle(fixture.workflowId).digest);
+    assert.equal(captured.request.schemaVersion, "m5c-model-qa-request-v1"); assert.equal(captured.request.workingCopyDigest, copies.getBundle(fixture.workflowId).digest);
+    assert.equal(captured.metadata.qaMode, "enabled"); assert.equal(captured.metadata.reservation.maxOutputTokens, 32_768);
     assert.ok(result.run.findings.some((finding) => finding.code === "relation-risk" && finding.layer === "model"));
     const entries = fixture.database.prepare("SELECT entry_type AS entryType FROM flow_budget_ledger WHERE workspace_id = ? AND workflow_id = ? AND reservation_id = 'qa:qa-one' ORDER BY entry_type")
       .all(fixture.workspaceId, fixture.workflowId).map((row) => row.entryType).sort();
