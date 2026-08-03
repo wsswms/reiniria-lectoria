@@ -38,6 +38,9 @@ export class CandidateKnowledgeNeedService {
   capturePlan(workflowId) {
     const current = this.plans.get(workflowId);
     if (current.planHead.state !== "approved") throw new CandidateKnowledgeNeedConflictError("approved current Plan is required");
+    const derivative = this.database.prepare("SELECT 1 FROM candidate_knowledge_need_plan_bindings WHERE workspace_id = ? AND plan_revision_id = ? LIMIT 1")
+      .get(this.workspaceId, current.plan.planRevisionId);
+    if (derivative) return Object.freeze([]);
     const context = this.database.prepare(`SELECT revision.context_revision_id AS contextRevisionId, revision.context_digest AS contextDigest
       FROM temporary_context_heads head JOIN temporary_context_revisions revision ON revision.workspace_id = head.workspace_id
       AND revision.context_revision_id = head.context_revision_id WHERE head.workspace_id = ? AND head.workflow_id = ? AND head.state = 'approved'`)
