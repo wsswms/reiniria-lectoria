@@ -79,6 +79,25 @@ export class FlowPlanService {
     return this.get(workflowId);
   }
 
+  reviseApprovedForKnowledgeNeed(workflowId, expectedVersion, item, actorInput) {
+    const by = actor(actorInput, ["system"]); const current = this.get(workflowId); const timestamp = this.now().toISOString();
+    if (current.planHead.state !== "approved" || current.planHead.version !== expectedVersion) throw new FlowPlanConflictError("approved current plan is required");
+    const plan = contextPlanContract({ ...current.plan, schemaVersion: M5C_CONTRACT_VERSION, planRevisionId: this.id(), revision: current.plan.revision + 1,
+      state: "draft", items: [...current.plan.items.map((existing) => ({ ...existing, itemId: this.id() })), item], createdBy: by, createdAt: timestamp });
+    this.database.transaction(() => {
+      this.#insertPlan(plan);
+      const changed = this.database.prepare("UPDATE translation_context_plan_heads SET plan_revision_id = ?, revision = ?, version = version + 1, state = 'draft', updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND version = ? AND state = 'approved'")
+        .run(plan.planRevisionId, plan.revision, timestamp, this.workspaceId, workflowId, expectedVersion).changes;
+      if (changed !== 1) throw new FlowPlanConflictError("knowledge need plan revision conflict");
+      this.database.prepare("UPDATE temporary_context_heads SET state = 'stale', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'approved'")
+        .run(timestamp, this.workspaceId, workflowId);
+      this.database.prepare("UPDATE translation_flow_controls SET flow_state = 'planning', outcome_state = 'none', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ?")
+        .run(timestamp, this.workspaceId, workflowId);
+      this.#event(workflowId, "translation-knowledge-need-added", by, { planRevisionId: plan.planRevisionId, itemId: item.itemId }, timestamp);
+    }).immediate();
+    return this.get(workflowId);
+  }
+
   submitPlan(workflowId, expectedVersion, actorInput) {
     const by = actor(actorInput, ["system"]); const timestamp = this.now().toISOString();
     const changed = this.database.transaction(() => {

@@ -150,7 +150,7 @@ export async function runRealProviderExercise({
   while (generated.length < dryPlan.calls) {
     const result = await executor.executeNext();
     if (result.status !== "completed") {
-      throw Object.assign(new Error("real Provider exercise did not complete"), { result });
+      throw Object.assign(new Error(`real Provider exercise did not complete: ${result.error?.category ?? result.status}`), { result });
     }
     generated.push(result);
   }

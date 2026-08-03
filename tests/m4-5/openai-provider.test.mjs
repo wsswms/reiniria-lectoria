@@ -28,7 +28,7 @@ function success(requestValue, overrides = {}) {
     incomplete_details: null,
     output: [{
       type: "message",
-      content: [{ type: "output_text", text: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `zh:${segment.sourceText}` })) }) }],
+      content: [{ type: "output_text", text: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `zh:${segment.sourceText}`, knowledgeNeeds: [] })) }) }],
     }],
     usage: { input_tokens: 24, output_tokens: 11, total_tokens: 35, input_tokens_details: { cached_tokens: 5 } },
     ...overrides,

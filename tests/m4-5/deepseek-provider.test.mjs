@@ -28,7 +28,7 @@ function success(requestValue, overrides = {}) {
       finish_reason: "stop",
       message: {
         role: "assistant",
-        content: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `ja:${segment.sourceText}` })) }),
+        content: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `ja:${segment.sourceText}`, knowledgeNeeds: [] })) }),
         reasoning_content: "must never be persisted",
       },
     }],

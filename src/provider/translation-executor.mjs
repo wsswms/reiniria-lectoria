@@ -6,6 +6,7 @@ import { TranslationTaskOrchestrator } from "./task-orchestrator.mjs";
 import { MachineCandidateService } from "../translation/machine-candidate-service.mjs";
 import { TranslationFlowBudgetService } from "../m5c/flow-budget-service.mjs";
 import { isUncertainProviderOutcome } from "../m5c/provider-outcome.mjs";
+import { CandidateKnowledgeNeedService } from "../m5c/candidate-knowledge-need-service.mjs";
 
 function required(value, name) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -38,6 +39,7 @@ export class TranslationExecutor {
     candidates,
     evidenceService,
     flowBudgets,
+    knowledgeNeeds,
   } = {}) {
     if (typeof invokeProvider !== "function") throw new TypeError("invokeProvider is required");
     if (!Number.isSafeInteger(estimatedOutputTokens) || estimatedOutputTokens < 1) throw new TypeError("estimatedOutputTokens is invalid");
@@ -53,6 +55,7 @@ export class TranslationExecutor {
     this.budgets = budgets ?? new PricingBudgetService(database, trustedWorkspaceId, { now });
     this.candidates = candidates ?? new MachineCandidateService(database, trustedWorkspaceId, { now });
     this.flowBudgets = flowBudgets ?? new TranslationFlowBudgetService(database, trustedWorkspaceId, { now });
+    this.knowledgeNeeds = knowledgeNeeds ?? new CandidateKnowledgeNeedService(database, trustedWorkspaceId, { now });
     if (evidenceService !== undefined && (!evidenceService || typeof evidenceService.evidenceIdsForAttempt !== "function"
       || typeof evidenceService.assertCurrent !== "function")) throw new TypeError("evidenceService is invalid");
     this.evidenceService = evidenceService;
@@ -209,6 +212,7 @@ export class TranslationExecutor {
     }
     const running = this.tasks.startProvider(lease.attempt_id, lease.version, this.workerId);
     let providerResponse;
+    let providerCandidate;
     let strictResponse;
     let parsed;
     try {
@@ -218,7 +222,7 @@ export class TranslationExecutor {
       } catch {
         throw Object.assign(new Error("provider response validation failed"), { category: "malformed-response", retryable: false });
       }
-      const providerCandidate = providerResponse.candidates[0];
+      providerCandidate = providerResponse.candidates[0];
       const segment = context.manifest.segments[0];
       strictResponse = {
         schemaVersion: RESPONSE_VERSION,
@@ -261,10 +265,12 @@ export class TranslationExecutor {
         providerResponseId: providerResponse.responseId,
         ...providerResponse.usage,
       });
-      let candidate; let budget; let flowBudget;
+      let candidate; let capturedNeeds; let budget; let flowBudget;
       this.database.transaction(() => {
         this.tasks.complete(lease.attempt_id, running.version, this.workerId, parsed.outputDigest, { usage });
         candidate = this.candidates.accept(lease.attempt_id, strictResponse);
+        capturedNeeds = this.#flowBinding(lease.attempt_id) && providerCandidate.knowledgeNeeds.length > 0
+          ? this.knowledgeNeeds.captureTranslation(lease.attempt_id, providerCandidate.knowledgeNeeds) : Object.freeze([]);
         const coverage = this.database.prepare(`SELECT
           (SELECT count(*) FROM source_segment_versions source JOIN translation_workflows workflow
             ON workflow.workspace_id = source.workspace_id AND workflow.source_revision_id = source.source_revision_id
@@ -278,9 +284,15 @@ export class TranslationExecutor {
         budget = this.budgets.finalize(reservation.reservation_id, usageRecord?.usage_record_id ?? null);
         flowBudget = this.#finalizeFlowBudget(lease.attempt_id, "completed");
       }).immediate();
-      return Object.freeze({ status: "completed", taskId: lease.task_id, attemptId: lease.attempt_id, candidate, usage, budget, ...(flowBudget ? { flowBudget } : {}) });
-    } catch {
-      const unknown = normalizedFailure({ category: "unknown-outcome", retryable: false });
+      return Object.freeze({ status: "completed", taskId: lease.task_id, attemptId: lease.attempt_id, candidate,
+        knowledgeNeeds: capturedNeeds, usage, budget, ...(flowBudget ? { flowBudget } : {}) });
+    } catch (error) {
+      const safeCode = typeof error?.code === "string" && /^[A-Z0-9_]{1,64}$/u.test(error.code) ? error.code
+        : String(error?.message).includes("budget") ? "BUDGET_PERSISTENCE"
+          : String(error?.message).includes("candidate") ? "CANDIDATE_PERSISTENCE"
+            : String(error?.message).includes("knowledge") ? "KNOWLEDGE_NEED_PERSISTENCE"
+              : typeof error?.name === "string" ? error.name.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase().slice(0, 64) : undefined;
+      const unknown = normalizedFailure({ category: "unknown-outcome", retryable: false, ...(safeCode ? { providerCode: safeCode } : {}) });
       try {
         this.database.transaction(() => {
           this.tasks.fail(lease.attempt_id, running.version, this.workerId, unknown);

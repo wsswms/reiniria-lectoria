@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 26;
+export const CURRENT_SCHEMA_VERSION = 27;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -3082,6 +3082,84 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER m5c_research_operations_no_delete BEFORE DELETE ON m5c_research_operations BEGIN SELECT RAISE(ABORT, 'M5C research operation binding is immutable'); END;
       CREATE TRIGGER translation_flow_recovery_decisions_no_update BEFORE UPDATE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
       CREATE TRIGGER translation_flow_recovery_decisions_no_delete BEFORE DELETE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 27,
+    name: "m5c-candidate-knowledge-needs",
+    sql: `
+      CREATE TABLE candidate_knowledge_needs (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        attempt_id TEXT,
+        plan_revision_id TEXT NOT NULL,
+        context_revision_id TEXT,
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        origin_type TEXT NOT NULL CHECK(origin_type IN ('plan-item', 'translation-attempt')),
+        origin_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'entity', 'fact', 'relation', 'measurement')),
+        impact TEXT NOT NULL CHECK(impact IN ('critical', 'high', 'medium', 'low')),
+        question TEXT NOT NULL CHECK(length(question) BETWEEN 1 AND 512),
+        question_digest TEXT NOT NULL CHECK(length(question_digest) = 71 AND substr(question_digest, 1, 7) = 'sha256:'),
+        related_segment_ids_json TEXT NOT NULL CHECK(json_valid(related_segment_ids_json) AND json_type(related_segment_ids_json) = 'array'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, workflow_id, plan_revision_id, context_digest, question_digest),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id),
+        FOREIGN KEY (workspace_id, attempt_id) REFERENCES translation_attempts(workspace_id, attempt_id),
+        FOREIGN KEY (workspace_id, segment_id) REFERENCES document_segments(workspace_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('research', 'guidance', 'proceed-with-risk')),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, need_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_plan_bindings (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        plan_item_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, plan_revision_id, plan_item_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id),
+        FOREIGN KEY (workspace_id, plan_revision_id, plan_item_id)
+          REFERENCES translation_context_plan_items(workspace_id, plan_revision_id, item_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_research_bindings (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, request_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES m5c_research_bindings(workspace_id, request_id)
+      ) STRICT;
+
+      CREATE TRIGGER candidate_knowledge_needs_no_update BEFORE UPDATE ON candidate_knowledge_needs BEGIN SELECT RAISE(ABORT, 'candidate knowledge need is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_needs_no_delete BEFORE DELETE ON candidate_knowledge_needs BEGIN SELECT RAISE(ABORT, 'candidate knowledge need is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_decisions_no_update BEFORE UPDATE ON candidate_knowledge_need_decisions BEGIN SELECT RAISE(ABORT, 'candidate knowledge need decision is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_decisions_no_delete BEFORE DELETE ON candidate_knowledge_need_decisions BEGIN SELECT RAISE(ABORT, 'candidate knowledge need decision is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_plan_bindings_no_update BEFORE UPDATE ON candidate_knowledge_need_plan_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need plan binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_plan_bindings_no_delete BEFORE DELETE ON candidate_knowledge_need_plan_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need plan binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_research_bindings_no_update BEFORE UPDATE ON candidate_knowledge_need_research_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need research binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_research_bindings_no_delete BEFORE DELETE ON candidate_knowledge_need_research_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need research binding is immutable'); END;
     `,
   }),
 ]);

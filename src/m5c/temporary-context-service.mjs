@@ -4,6 +4,7 @@ import { buildContextManifest, PROMPT_VERSION } from "../provider/prompt-context
 import { TranslationTaskOrchestrator } from "../provider/task-orchestrator.mjs";
 import { contentDigest } from "./contracts.mjs";
 import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
+import { CandidateKnowledgeNeedService } from "./candidate-knowledge-need-service.mjs";
 
 export class TemporaryContextConflictError extends Error {
   constructor(message = "temporary translation context conflict") { super(message); this.name = "TemporaryContextConflictError"; this.code = "TEMPORARY_CONTEXT_CONFLICT"; }
@@ -30,6 +31,12 @@ export class TemporaryContextService {
       ON revision.workspace_id = head.workspace_id AND revision.plan_revision_id = head.plan_revision_id
       WHERE head.workspace_id = ? AND head.workflow_id = ?`).get(this.workspaceId, workflowId);
     if (!plan || plan.state !== "approved") throw new TemporaryContextConflictError("approved current ContextPlan is required");
+    const plannerMode = this.database.prepare("SELECT planner_mode AS plannerMode FROM translation_context_plan_revisions WHERE workspace_id = ? AND plan_revision_id = ?")
+      .get(this.workspaceId, plan.planRevisionId)?.plannerMode;
+    if (plannerMode === "model-assisted") {
+      const needs = new CandidateKnowledgeNeedService(this.database, this.workspaceId, { id: this.id, now: this.now });
+      needs.capturePlan(workflowId); needs.assertCurrentPlanDispositionComplete(workflowId);
+    }
     if (!Array.isArray(guidanceIds) || !Array.isArray(researchClaimIds) || new Set(guidanceIds).size !== guidanceIds.length || new Set(researchClaimIds).size !== researchClaimIds.length) throw new TypeError("context source ids must be unique arrays");
     const items = this.#planItems(plan.planRevisionId);
     for (const guidanceId of guidanceIds) items.push(this.#guidanceItem(workflowId, guidanceId));
