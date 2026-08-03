@@ -28,7 +28,7 @@ import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
 import { KNOWLEDGE_LOOP_ARTICLES, BRAVE_COST_MICROS_USD_PER_CALL,
   MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, ROLE_OUTPUT_TOKENS, TRANSLATION_OUTPUT_TOKENS, digest,
   knowledgeLoopArticleBudget, knowledgeLoopLimits, selectOfficialSearchResult,
-  summarizeKnowledgeNeeds } from "./m5c-real-knowledge-loop.mjs";
+  researchStepFailure, summarizeKnowledgeNeeds } from "./m5c-real-knowledge-loop.mjs";
 import { PRODUCTION_RESPONSE_BYTES_CEILING } from "../src/m5c/role-policy.mjs";
 
 const USER = Object.freeze({ type: "user", id: "m5c-real-knowledge-loop-owner" });
@@ -68,46 +68,50 @@ function decideNeedBatch(service, needs, selected) {
 }
 
 async function researchNeed({ fixture, plans, needs, need, article, braveKeyPath, ordinal }) {
-  let promoted = needs.promoteResearchNeed(need.needId); let plan = plans.get(need.workflowId);
-  plan = plans.submitPlan(need.workflowId, plan.planHead.version, SYSTEM); plans.decidePlan(need.workflowId, plan.planHead.version, "approved", USER);
-  let request = needs.createResearchRequest(need.needId); const bridge = new M5CResearchBridgeService(fixture.database, fixture.workspaceId);
-  request = bridge.submit(request.request.requestId, request.head.version, SYSTEM);
-  request = bridge.decide(request.request.requestId, request.head.version, "approved", USER);
-  const now = new Date(); const grantInput = { schemaVersion: "1.0", grantId: randomUUID(), requestId: request.request.requestId,
+  let step = "promote-plan";
+  try {
+    let promoted = needs.promoteResearchNeed(need.needId); let plan = plans.get(need.workflowId);
+    plan = plans.submitPlan(need.workflowId, plan.planHead.version, SYSTEM); plans.decidePlan(need.workflowId, plan.planHead.version, "approved", USER);
+    step = "create-request"; let request = needs.createResearchRequest(need.needId); const bridge = new M5CResearchBridgeService(fixture.database, fixture.workspaceId);
+    request = bridge.submit(request.request.requestId, request.head.version, SYSTEM);
+    request = bridge.decide(request.request.requestId, request.head.version, "approved", USER);
+    step = "issue-grant"; const now = new Date(); const grantInput = { schemaVersion: "1.0", grantId: randomUUID(), requestId: request.request.requestId,
     requestRevisionId: request.head.requestRevisionId, providers: [{ capability: "search", providerId: "brave-search", fallbackOrder: 0,
       budget: { maxSearchCalls: 1, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: BRAVE_COST_MICROS_USD_PER_CALL } }],
     limits: { maxRounds: 1, maxSearchCalls: 1, maxResultsPerSearch: 10, maxContentUrls: 1, maxDurationSeconds: 300,
       maxRuns: 1, maxModelTokens: 0, maxCostMicrosUsd: BRAVE_COST_MICROS_USD_PER_CALL },
     allowedDomains: [article.expectedHost], allowedLanguages: ["ja"], approvedBy: USER, approvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 300_000).toISOString() };
-  const issued = bridge.issueGrant(request.request.requestId, grantInput, USER);
-  const grantId = issued.grant.grant.grantId;
-  const created = bridge.createRun(request.request.requestId, contentDigest({ needId: need.needId, ordinal }), SYSTEM);
-  const started = bridge.startRun(request.request.requestId, created.run.runId, SYSTEM);
-  const reservationId = `search:${article.id}:${ordinal}:${need.needId}`; const details = { runId: started.run.runId,
+    const issued = bridge.issueGrant(request.request.requestId, grantInput, USER); const grantId = issued.grant.grant.grantId;
+    step = "create-run"; const created = bridge.createRun(request.request.requestId, contentDigest({ needId: need.needId, ordinal }), SYSTEM);
+    const started = bridge.startRun(request.request.requestId, created.run.runId, SYSTEM);
+    step = "reserve-search"; const reservationId = `search:${article.id}:${ordinal}:${need.needId}`; const details = { runId: started.run.runId,
     providerId: "brave-search", round: 1, query: article.query, language: "ja", country: "JP", idempotencyKey: reservationId };
-  const usage = estimate(1, 0, 0, 0, BRAVE_COST_MICROS_USD_PER_CALL, 60_000);
-  const reserved = bridge.reserveOperation(request.request.requestId, grantId, "search", reservationId, usage, details);
-  const adapter = createRealBraveGatewayAdapter({ credentialPath: braveKeyPath, costMicrosUsdPerCall: BRAVE_COST_MICROS_USD_PER_CALL,
+    const usage = estimate(1, 0, 0, 0, BRAVE_COST_MICROS_USD_PER_CALL, 60_000);
+    const reserved = bridge.reserveOperation(request.request.requestId, grantId, "search", reservationId, usage, details);
+    step = "invoke-search"; const adapter = createRealBraveGatewayAdapter({ credentialPath: braveKeyPath, costMicrosUsdPerCall: BRAVE_COST_MICROS_USD_PER_CALL,
     brokerOptions: { timeoutMs: 30_000 } });
-  const startedAt = Date.now(); const response = await adapter.search({ query: article.query, count: 10, country: "JP", searchLanguage: "ja" });
-  const actual = { ...usage, durationMs: Date.now() - startedAt }; const artifacts = new WebSearchArtifactService(fixture.database, fixture.workspaceId)
+    const startedAt = Date.now(); const response = await adapter.search({ query: article.query, count: 10, country: "JP", searchLanguage: "ja" });
+    step = "record-artifact"; const actual = { ...usage, durationMs: Date.now() - startedAt }; const artifacts = new WebSearchArtifactService(fixture.database, fixture.workspaceId)
     .recordResearch(reserved.research.queryId, response);
-  bridge.settleOperation(request.request.requestId, reservationId, actual, { responseDigest: response.responseDigest });
-  const selected = selectOfficialSearchResult(artifacts.results, article.expectedHost); const evidence = new ResearchEvidenceService(fixture.database, fixture.workspaceId);
-  const source = evidence.addSource(started.run.runId, reserved.research.queryId, { canonicalUrl: selected.url, tier: "S1",
+    step = "settle-search"; bridge.settleOperation(request.request.requestId, reservationId, actual, { responseDigest: response.responseDigest });
+    step = "create-evidence"; const selected = selectOfficialSearchResult(artifacts.results, article.expectedHost); const evidence = new ResearchEvidenceService(fixture.database, fixture.workspaceId);
+    const source = evidence.addSource(started.run.runId, reserved.research.queryId, { canonicalUrl: selected.url, tier: "S1",
     lineage: "search-snippet", artifactType: "search-result", artifactId: selected.resultId });
-  const quote = `${selected.title}\n${selected.description}`; const citation = evidence.cite(source.sourceId, { quote, locator: { start: 0, end: quote.length } });
-  const claim = evidence.claim(started.run.runId, { text: quote, citationIds: [citation.citationId], inference: false,
+    const quote = `${selected.title}\n${selected.description}`; const citation = evidence.cite(source.sourceId, { quote, locator: { start: 0, end: quote.length } });
+    const claim = evidence.claim(started.run.runId, { text: quote, citationIds: [citation.citationId], inference: false,
     disputed: false, insufficient: false, narrowOfficial: true });
-  const totals = new ResearchBudgetService(fixture.database, fixture.workspaceId).totals(grantId);
-  const report = evidence.report(started.run.runId, { questionAnswers: [{ question: need.question, answer: quote, status: "supported" }],
+    step = "create-report"; const totals = new ResearchBudgetService(fixture.database, fixture.workspaceId).totals(grantId);
+    const report = evidence.report(started.run.runId, { questionAnswers: [{ question: need.question, answer: quote, status: "supported" }],
     claimIds: [claim.claimId], usage: totals });
-  bridge.runs.transition(started.run.runId, "completed", { details: { reportId: report.reportId }, actor: SYSTEM });
-  return Object.freeze({ needId: need.needId, planRevisionId: promoted.planBinding.planRevisionId, requestId: request.request.requestId,
-    grantId, runId: started.run.runId, query: article.query, responseDigest: response.responseDigest,
-    selectedUrl: selected.url, selectedResultDigest: selected.resultDigest, claimId: claim.claimId, supportLevel: claim.supportLevel,
-    reportId: report.reportId, outcome: report.outcome, usage: totals });
+    step = "complete-run"; bridge.runs.transition(started.run.runId, "completed", { details: { reportId: report.reportId }, actor: SYSTEM });
+    return Object.freeze({ needId: need.needId, planRevisionId: promoted.planBinding.planRevisionId, requestId: request.request.requestId,
+      grantId, runId: started.run.runId, query: article.query, responseDigest: response.responseDigest,
+      selectedUrl: selected.url, selectedResultDigest: selected.resultDigest, claimId: claim.claimId, supportLevel: claim.supportLevel,
+      reportId: report.reportId, outcome: report.outcome, usage: totals });
+  } catch (error) {
+    throw researchStepFailure(step, error);
+  }
 }
 
 function addProviderBudget(pricing, articleId, suffix, hardLimitMicros) {
@@ -131,7 +135,8 @@ async function executeTranslations({ fixture, workflowId, contexts, pricing, cre
   const results = [];
   while (true) {
     const result = await executor.executeNext(); if (result.status === "idle") break;
-    if (result.status !== "completed") throw Object.assign(new Error(`${category} did not complete`), { category: result.error?.category ?? result.status });
+    if (result.status !== "completed") throw Object.assign(new Error(`${category} did not complete`), { category: result.error?.category ?? result.status,
+      ...(typeof result.error?.providerCode === "string" && /^[A-Z0-9_]{1,64}$/u.test(result.error.providerCode) ? { code: result.error.providerCode } : {}) });
     results.push(result); progress(article.id, category, results.length, segmentIds.length);
   }
   if (results.length !== segmentIds.length) throw new Error(`${category} call count mismatch`); return results;

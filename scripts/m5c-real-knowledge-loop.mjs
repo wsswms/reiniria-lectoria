@@ -13,6 +13,27 @@ export const MAX_RESEARCH_CALLS_PER_ARTICLE = 2;
 export const MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE = 16;
 export const TRANSLATION_OUTPUT_TOKENS = 16_384;
 export const ROLE_OUTPUT_TOKENS = 65_536;
+export const RESEARCH_STEP_CODES = Object.freeze({
+  "promote-plan": "RESEARCH_PROMOTE_PLAN",
+  "create-request": "RESEARCH_CREATE_REQUEST",
+  "issue-grant": "RESEARCH_ISSUE_GRANT",
+  "create-run": "RESEARCH_CREATE_RUN",
+  "reserve-search": "RESEARCH_RESERVE_SEARCH",
+  "invoke-search": "RESEARCH_INVOKE_SEARCH",
+  "record-artifact": "RESEARCH_RECORD_ARTIFACT",
+  "settle-search": "RESEARCH_SETTLE_SEARCH",
+  "create-evidence": "RESEARCH_CREATE_EVIDENCE",
+  "create-report": "RESEARCH_CREATE_REPORT",
+  "complete-run": "RESEARCH_COMPLETE_RUN",
+});
+
+export function researchStepFailure(step, cause) {
+  const code = RESEARCH_STEP_CODES[step];
+  if (!code) throw new TypeError("real research step is invalid");
+  return Object.assign(new Error("real research step failed"), {
+    ...(typeof cause?.category === "string" ? { category: cause.category } : {}), code,
+  });
+}
 
 export function knowledgeLoopArticleBudget(segmentCount) {
   if (!Number.isSafeInteger(segmentCount) || segmentCount < 1 || segmentCount > 128) throw new TypeError("segment count is invalid");
