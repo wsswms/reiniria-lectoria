@@ -32,12 +32,13 @@ test("three M5E outcomes remain independent", () => {
 test("real-resource preflight stays closed until every offline and audit gate passes", () => {
   const base = { branch: "exp-m5e-knowledge-effect", isolatedModules: true, clusterTestsPassed: true, coordinatorTestsPassed: true,
     persistenceProbePassed: true, historicalReferenceSeedReady: true, referenceFamiliesFrozen: true, blindProtocolPassed: true,
-    articleInputsReady: true, fullRegressionPassed: true,
+    articleInputsReady: true, realRunnerDryRunPassed: true, fullRegressionPassed: true,
     auditDirectoryMode: "0700", auditFileMode: "0600", secretsReady: true, pricingCheckedAt: "2026-08-03T00:00:00.000Z",
     limits: { deepSeekAttempts: 310, deepSeekCostCny: 20, braveCalls: 50, braveCostUsd: 0.25, fetchUrls: 30 } };
   assert.equal(buildM5EPreflight(base).status, "ready");
   const closed = buildM5EPreflight({ ...base, fullRegressionPassed: false });
   assert.equal(closed.status, "closed"); assert.deepEqual(closed.blockers, ["full-regression"]);
+  assert.deepEqual(buildM5EPreflight({ ...base, realRunnerDryRunPassed: false }).blockers, ["real-runner-dry-run"]);
   assert.throws(() => buildM5EPreflight({ ...base, limits: { ...base.limits, braveCalls: 51 } }), /hard limit/);
 });
 

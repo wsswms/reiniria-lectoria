@@ -2,7 +2,8 @@ const BLOCKERS = Object.freeze([
   ["isolatedModules", "module-isolation"], ["clusterTestsPassed", "cluster-tests"], ["coordinatorTestsPassed", "coordinator-tests"],
   ["persistenceProbePassed", "persistence-probe"], ["historicalReferenceSeedReady", "historical-reference-seed"],
   ["referenceFamiliesFrozen", "reference-families"], ["blindProtocolPassed", "blind-protocol"],
-  ["articleInputsReady", "article-inputs"], ["fullRegressionPassed", "full-regression"], ["secretsReady", "secrets"],
+  ["articleInputsReady", "article-inputs"], ["realRunnerDryRunPassed", "real-runner-dry-run"],
+  ["fullRegressionPassed", "full-regression"], ["secretsReady", "secrets"],
 ]);
 
 export function buildM5EPreflight(input) {
