@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +57,30 @@ test("approved context is filtered per segment bound to every machine attempt an
     assert.equal(userPayload.translationContext.contextRevisionId, context.context.contextRevisionId);
     assert.match(outbound.body.messages[0].content, /Disputed and warning-only items.*never be asserted/);
     assert.equal(plan.plan.planRevisionId, bindings[0].plan_revision_id);
+  } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a multi-segment Plan item is projected to the owning Provider request segment", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-context-projection-")); const fixture = setup(join(root, "app.sqlite3"));
+  try {
+    const plans = new FlowPlanService(fixture.database, fixture.workspaceId); let plan = plans.create({ workflowId: fixture.workflowId,
+      documentId: fixture.documentId, sourceRevisionId: fixture.sourceRevisionId, targetLanguage: "zh-CN" }, user);
+    plan = plans.submitPlan(fixture.workflowId, plan.planHead.version, system); plan = plans.decidePlan(fixture.workflowId, plan.planHead.version, "approved", user);
+    const segmentIds = fixture.database.prepare("SELECT segment_id AS segmentId FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? ORDER BY ordinal")
+      .all(fixture.workspaceId, fixture.sourceRevisionId).map((item) => item.segmentId);
+    plan = plans.reviseApprovedForKnowledgeNeed(fixture.workflowId, plan.planHead.version, { itemId: randomUUID(), kind: "relation",
+      coverage: "covered", instructionType: "background", impact: "medium", segmentIds, dependencies: {}, content: { relation: "shared fixture" } }, system);
+    plan = plans.submitPlan(fixture.workflowId, plan.planHead.version, system); plans.decidePlan(fixture.workflowId, plan.planHead.version, "approved", user);
+    const contexts = new TemporaryContextService(fixture.database, fixture.workspaceId); let context = contexts.assemble(fixture.workflowId, {}, system);
+    context = contexts.decide(fixture.workflowId, context.head.version, "approved", user); const built = buildContextManifest(fixture.database, fixture.workspaceId,
+      { workflowId: fixture.workflowId, segmentIds: [segmentIds[0]], temporaryContextRevisionId: context.context.contextRevisionId });
+    const scoped = built.manifest.translationContext.items.find((item) => item.content.relation === "shared fixture"); assert.ok(scoped);
+    assert.deepEqual(scoped.segmentIds, [segmentIds[0]]);
+    assert.doesNotThrow(() => buildDeepSeekRequest({ workspaceId: fixture.workspaceId, taskId: randomUUID(), attemptId: randomUUID(),
+      workflowId: fixture.workflowId, sourceRevisionId: fixture.sourceRevisionId, targetLanguage: "zh-CN", providerId: "deepseek",
+      modelId: "deepseek-chat", maxOutputTokens: 1_024, promptVersion: "lectoria-translation-v1", contextDigest: built.contextDigest,
+      segments: built.manifest.segments.map((segment) => ({ segmentId: segment.segmentId, sourceDigest: segment.sourceDigest,
+        sourceText: segment.sourceText, protected: segment.protected })), translationContext: built.manifest.translationContext }));
   } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
 });
 

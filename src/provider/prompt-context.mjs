@@ -106,7 +106,8 @@ function temporaryContext(database, trustedWorkspaceId, workflow, segmentIds, co
   const value = JSON.parse(row.contextJson);
   const canonical = stableJson(value); if (digest(canonical) !== row.contextDigest) throw new Error("temporary context integrity failed");
   const allowed = new Set(segmentIds);
-  const items = value.items.filter((item) => item.segmentIds.length === 0 || item.segmentIds.some((segmentId) => allowed.has(segmentId)));
+  const items = value.items.filter((item) => item.segmentIds.length === 0 || item.segmentIds.some((segmentId) => allowed.has(segmentId)))
+    .map((item) => item.segmentIds.length === 0 ? item : { ...item, segmentIds: item.segmentIds.filter((segmentId) => allowed.has(segmentId)) });
   if (items.some((item) => ["disputed", "warning-only"].includes(item.instructionType) && item.affirmative !== false)) throw new Error("weak context instruction escalation rejected");
   return { schemaVersion: value.schemaVersion, contextRevisionId, contextDigest: row.contextDigest, items };
 }
