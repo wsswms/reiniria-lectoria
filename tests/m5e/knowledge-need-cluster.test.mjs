@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildKnowledgeNeedFunnel } from "../../src/m5e/knowledge-need-cluster.mjs";
+import { buildKnowledgeNeedFunnel, candidateSetDigest } from "../../src/m5e/knowledge-need-cluster.mjs";
 
 const need = (needId, overrides = {}) => ({
   needId, originType: "plan-item", originId: `origin-${needId}`, kind: "term", impact: "high",
@@ -60,4 +60,12 @@ test("only exact persisted bindings or user dispositions remove clusters from ac
   assert.equal(resolved.clusters.find((item) => item.clusterId === critical.clusterId).resolution, "persisted-knowledge");
   assert.equal(resolved.clusters.find((item) => item.clusterId === fact.clusterId).resolution, "user-guidance");
   assert.equal(resolved.clusters.find((item) => item.clusterId === style.clusterId).resolution, "deferred-low-impact");
+});
+
+test("candidate set digest ignores run-specific need and segment identities but changes with semantic output", () => {
+  const first = buildKnowledgeNeedFunnel([need("a")]);
+  const second = buildKnowledgeNeedFunnel([need("run-2", { originId: "different", relatedSegmentIds: ["another-segment"] })]);
+  assert.equal(candidateSetDigest(first), candidateSetDigest(second));
+  const changed = buildKnowledgeNeedFunnel([need("run-3", { semantic: { surface: "どどっと400", entityType: "product-name" } })]);
+  assert.notEqual(candidateSetDigest(first), candidateSetDigest(changed));
 });

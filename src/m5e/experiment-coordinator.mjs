@@ -11,10 +11,10 @@ function string(value, name) { if (typeof value !== "string" || value.length ===
 
 export function createM5EExperimentPlan(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("experiment plan is invalid");
-  const plan = Object.freeze({ schemaVersion: "m5e-experiment-plan-v1",
+  const plan = Object.freeze({ schemaVersion: "m5e-experiment-plan-v2",
     part1SourceDigest: digest(input.part1SourceDigest, "part1SourceDigest"), part2SourceDigest: digest(input.part2SourceDigest, "part2SourceDigest"),
-    part1CandidateSetDigest: digest(input.part1CandidateSetDigest, "part1CandidateSetDigest"),
-    part2CandidateSetDigest: digest(input.part2CandidateSetDigest, "part2CandidateSetDigest"),
+    plannerConfigDigest: digest(input.plannerConfigDigest, "plannerConfigDigest"),
+    referenceFamilySetDigest: digest(input.referenceFamilySetDigest, "referenceFamilySetDigest"),
     coldFactSetDigest: digest(input.coldFactSetDigest, "coldFactSetDigest"),
     arms: Object.freeze([
       Object.freeze({ armId: "C1", article: "part1", knowledgeMode: "cold", externalResearch: false }),
@@ -37,10 +37,13 @@ function armResult(input) {
   if (!Number.isSafeInteger(input.providerAttempts) || input.providerAttempts < 0 || input.providerAttempts > 310) throw new TypeError("providerAttempts is invalid");
   if (!Number.isSafeInteger(input.braveCalls) || input.braveCalls < 0 || input.braveCalls > 50) throw new TypeError("braveCalls is invalid");
   if (!Array.isArray(input.fetchUrls) || input.fetchUrls.length > 30 || new Set(input.fetchUrls).size !== input.fetchUrls.length) throw new TypeError("fetchUrls is invalid");
+  if (typeof input.referenceFamiliesInjected !== "boolean") throw new TypeError("referenceFamiliesInjected is invalid");
   return Object.freeze({ armId: input.armId, funnelDigest: digest(input.funnelDigest, "funnelDigest"), auditDigest: digest(input.auditDigest, "auditDigest"),
     sourceDigest: digest(input.sourceDigest, "sourceDigest"), candidateSetDigest: digest(input.candidateSetDigest, "candidateSetDigest"),
+    plannerConfigDigest: digest(input.plannerConfigDigest, "plannerConfigDigest"), referenceFamiliesInjected: input.referenceFamiliesInjected,
     qualityArtifactDigest: digest(input.qualityArtifactDigest, "qualityArtifactDigest"), providerAttempts: input.providerAttempts,
-    braveCalls: input.braveCalls, fetchUrls: Object.freeze([...input.fetchUrls].sort()), knowledgeSnapshotDigest: input.knowledgeSnapshotDigest ?? null,
+    braveCalls: input.braveCalls, fetchUrls: Object.freeze([...input.fetchUrls].sort()),
+    knowledgeSnapshotDigest: digest(input.knowledgeSnapshotDigest, "knowledgeSnapshotDigest"),
     retrievalBindings: Object.freeze((input.retrievalBindings ?? []).map((item) => Object.freeze({ clusterId: string(item.clusterId, "clusterId"),
       factId: string(item.factId, "factId"), revisionId: string(item.revisionId, "revisionId"), contentDigest: digest(item.contentDigest, "contentDigest"),
       retrieverVersion: string(item.retrieverVersion, "retrieverVersion") }))) });
@@ -49,7 +52,7 @@ function armResult(input) {
 export class M5EExperimentCoordinator {
   constructor(plan, { now = () => new Date() } = {}) {
     const comparable = plan && { ...plan }; if (comparable) delete comparable.planDigest;
-    if (!plan || plan.schemaVersion !== "m5e-experiment-plan-v1" || plan.planDigest !== sha(comparable)) throw new TypeError("experiment plan integrity failed");
+    if (!plan || plan.schemaVersion !== "m5e-experiment-plan-v2" || plan.planDigest !== sha(comparable)) throw new TypeError("experiment plan integrity failed");
     this.plan = plan; this.now = now; this.results = []; this.checkpoint = null;
   }
 
@@ -64,12 +67,11 @@ export class M5EExperimentCoordinator {
     if (result.armId !== expected) throw new Error(`expected arm ${expected}`);
     if (result.armId === "E2" && !this.checkpoint) throw new Error("Part1 knowledge checkpoint is required");
     const part1 = ["C1", "E1"].includes(result.armId);
-    if (result.sourceDigest !== (part1 ? this.plan.part1SourceDigest : this.plan.part2SourceDigest)
-      || result.candidateSetDigest !== (part1 ? this.plan.part1CandidateSetDigest : this.plan.part2CandidateSetDigest)) {
-      throw new Error("arm source or frozen candidate set does not match the experiment plan");
-    }
+    if (result.sourceDigest !== (part1 ? this.plan.part1SourceDigest : this.plan.part2SourceDigest)) throw new Error("arm source does not match the experiment plan");
+    if (result.plannerConfigDigest !== this.plan.plannerConfigDigest) throw new Error("arm Planner configuration does not match the experiment plan");
+    if (result.referenceFamiliesInjected) throw new Error("reference families must not be injected into Planner input");
     const expectedSnapshot = result.armId === "E2" ? this.checkpoint.warmFactSetDigest : this.plan.coldFactSetDigest;
-    if (result.knowledgeSnapshotDigest !== null && result.knowledgeSnapshotDigest !== expectedSnapshot) {
+    if (result.knowledgeSnapshotDigest !== expectedSnapshot) {
       throw new Error(result.armId === "E2" ? "E2 must use the warm fact set" : "cold arms must use the cold fact set");
     }
     if (result.armId !== "E2" && result.retrievalBindings.length > 0) throw new Error("only E2 may claim persisted knowledge retrieval");
@@ -78,7 +80,7 @@ export class M5EExperimentCoordinator {
         && item.revisionId === binding.revisionId && item.contentDigest === binding.contentDigest);
       if (!exact) throw new Error("E2 retrieval lineage does not match applied knowledge");
     }
-    this.results.push(Object.freeze({ ...result, knowledgeSnapshotDigest: expectedSnapshot, completedAt: this.now().toISOString() }));
+    this.results.push(Object.freeze({ ...result, completedAt: this.now().toISOString() }));
     return this.manifest();
   }
 

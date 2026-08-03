@@ -153,3 +153,11 @@ export function buildKnowledgeNeedFunnel(needs, { aliases = [], knowledgeBinding
     canonicalCandidates: Object.freeze(canonicalCandidates), clusters: Object.freeze(clusters),
     mappingDigest: sha({ candidates: canonicalCandidates, clusters }) });
 }
+
+export function candidateSetDigest(funnel) {
+  if (!funnel || funnel.schemaVersion !== M5E_FUNNEL_VERSION || !Array.isArray(funnel.clusters)) throw new TypeError("knowledge need funnel is invalid");
+  const semanticSet = funnel.clusters.map((item) => ({ canonicalKey: boundedString(item.canonicalKey, "canonicalKey"),
+    kind: item.kind, impact: item.impact, occurrenceCount: item.memberNeedIds.length, relatedSegmentCount: item.relatedSegmentIds.length }))
+    .sort((left, right) => stableJson(left).localeCompare(stableJson(right)));
+  return sha({ schemaVersion: "m5e-candidate-set-v1", semanticSet });
+}
