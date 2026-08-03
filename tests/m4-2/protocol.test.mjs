@@ -26,7 +26,7 @@ function outputFixture(task) {
     providerId: task.request.providerId, modelId: task.request.modelId, toolReceiptDigests: [], runtime: "pi-agent-core@0.83.0",
     response: {
       responseId: "fake-response", providerId: task.request.providerId, modelId: task.request.modelId,
-      candidates: task.request.segments.map((segment) => ({ segmentId: segment.segmentId, text: "目标" })),
+      candidates: task.request.segments.map((segment) => ({ segmentId: segment.segmentId, text: "目标", knowledgeNeeds: [] })),
       usage: { inputTokens: 2, outputTokens: 1, cachedInputTokens: 0, totalTokens: 3 },
     },
   };

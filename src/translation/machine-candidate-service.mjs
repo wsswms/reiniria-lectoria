@@ -67,6 +67,11 @@ export class MachineCandidateService {
       segmentIds: [attempt.segmentId],
       promptVersion: attempt.promptVersion,
       ...(() => {
+        const row = this.database.prepare("SELECT context_revision_id AS contextRevisionId FROM m5c_translation_attempt_bindings WHERE workspace_id = ? AND attempt_id = ?")
+          .get(this.workspaceId, attemptId);
+        return row ? { temporaryContextRevisionId: row.contextRevisionId } : {};
+      })(),
+      ...(() => {
         const evidenceIds = this.database.prepare(`
           SELECT evidence_id AS evidenceId FROM attempt_evidence_bindings
           WHERE workspace_id = ? AND attempt_id = ? ORDER BY evidence_digest, evidence_id

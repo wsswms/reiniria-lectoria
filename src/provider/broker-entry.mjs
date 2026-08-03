@@ -1,6 +1,7 @@
 import { fstatSync, readSync } from "node:fs";
 import { createCredentialResolver, createProviderBroker } from "./broker-contract.mjs";
 import { createProviderRegistry } from "./provider-registry.mjs";
+import { auditWriterForDescriptor, REAL_ARTICLE_EVALUATION_SCOPE } from "./llm-call-audit.mjs";
 
 async function readStream(stream, maximum) {
   const chunks = [];
@@ -28,9 +29,12 @@ function readDescriptorAtStart(fd, maximum) {
 
 try {
   const envelope = JSON.parse(await readStream(process.stdin, 4 * 1024 * 1024));
+  if (envelope.auditEnabled !== true && envelope.auditEnabled !== false) throw Object.assign(new Error(), { category: "policy" });
+  if (envelope.evaluationScope !== undefined && envelope.evaluationScope !== REAL_ARTICLE_EVALUATION_SCOPE) throw Object.assign(new Error(), { category: "policy" });
+  const audit = envelope.auditEnabled ? auditWriterForDescriptor(4) : undefined;
   const resolver = createCredentialResolver(async () => readDescriptorAtStart(3, 16 * 1024).trim());
   const broker = createProviderBroker({
-    adapters: createProviderRegistry({ faultMode: envelope.faultMode ?? "transport" }),
+    adapters: createProviderRegistry({ faultMode: envelope.faultMode ?? "transport", audit, evaluationScope: envelope.evaluationScope }),
     credentialResolver: resolver,
   });
   const response = await broker.invoke({ request: envelope.request, credentialRef: envelope.credentialRef });

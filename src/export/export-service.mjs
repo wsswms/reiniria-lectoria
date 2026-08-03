@@ -143,6 +143,8 @@ export class ExportService {
           const changed = this.database.prepare("UPDATE translation_workflows SET state = 'exported', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'approved-for-export' AND version = ?")
             .run(this.now().toISOString(), this.workspaceId, workflowId, workflow.version).changes;
           if (changed !== 1) throw new ExportConflictError("workflow export version conflict");
+          this.database.prepare("UPDATE translation_flow_controls SET flow_state = 'disposition', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND flow_state IN ('qa','human-review','final-qa','ready-export')")
+            .run(this.now().toISOString(), this.workspaceId, workflowId);
         }
         this.inject("before-export-commit");
       })();
