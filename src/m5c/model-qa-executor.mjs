@@ -3,6 +3,7 @@ import { M5CQAService } from "./qa-service.mjs";
 import { TranslationFlowBudgetService } from "./flow-budget-service.mjs";
 import { WorkCopyService } from "../translation/work-copy-service.mjs";
 import { isUncertainProviderOutcome } from "./provider-outcome.mjs";
+import { qaMode } from "./finalization.mjs";
 
 export class ModelQAExecutionError extends Error {
   constructor(message = "model QA execution failed", category = "provider", providerCode) { super(message); this.name = "ModelQAExecutionError"; this.code = "MODEL_QA_EXECUTION_FAILED"; this.category = category;
@@ -18,10 +19,10 @@ export class M5CModelQAExecutor {
     this.qa = qa ?? new M5CQAService(database, trustedWorkspaceId, { now, workCopies: this.workCopies, budgets: this.budgets });
   }
 
-  async execute(workflowId, { providerId, modelId, idempotencyKey, segmentIds = null, estimatedUsage, scope = "full" }) {
+  async execute(workflowId, { providerId, modelId, idempotencyKey, segmentIds = null, estimatedUsage, scope = "full", qaMode: requestedQaMode = "enabled" }) {
     for (const [value, name] of [[providerId, "providerId"], [modelId, "modelId"], [idempotencyKey, "idempotencyKey"]])
       if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} is required`);
-    const bundle = this.workCopies.getBundle(workflowId);
+    const selectedQaMode = qaMode(requestedQaMode); const bundle = this.workCopies.getBundle(workflowId);
     const included = segmentIds === null ? bundle.segments : bundle.segments.filter((segment) => segmentIds.includes(segment.segmentId));
     if (!included.length || (segmentIds && included.length !== new Set(segmentIds).size)) throw new ModelQAExecutionError("model QA segment scope mismatch", "policy");
     const workflow = this.database.prepare("SELECT source_revision_id AS sourceRevisionId, target_language AS targetLanguage FROM translation_workflows WHERE workspace_id = ? AND workflow_id = ?")
@@ -33,7 +34,7 @@ export class M5CModelQAExecutor {
     const reservationId = `qa:${idempotencyKey}`; const estimate = budgetUsageContract(estimatedUsage);
     this.budgets.reserve(workflowId, "qa", reservationId, estimate, { providerId, modelId, requestDigest: contentDigest(request) });
     let response;
-    try { response = await this.invokeModelQa(request, { providerId, modelId }); }
+    try { response = await this.invokeModelQa(request, { providerId, modelId, qaMode: selectedQaMode }); }
     catch (error) {
       const category = error?.category ?? "provider";
       if (isUncertainProviderOutcome(category)) this.budgets.unknown(workflowId, reservationId,
@@ -51,7 +52,7 @@ export class M5CModelQAExecutor {
       const usage = budgetUsageContract(response.usage); let run; let settlement;
       this.database.transaction(() => {
         run = this.qa.run(workflowId, { layers: ["invariant", "heuristic", "model"], scope, segmentIds,
-          modelFindings: response.findings, model: { providerId, modelId, responseId: response.responseId, requestDigest: contentDigest(request) } });
+          modelFindings: response.findings, model: { providerId, modelId, thinking: selectedQaMode, responseId: response.responseId, requestDigest: contentDigest(request) } });
         settlement = this.budgets.settle(workflowId, reservationId, usage, { qaRunId: run.qaRunId, responseId: response.responseId });
       }).immediate();
       return Object.freeze({ run, requestDigest: contentDigest(request), settlement });

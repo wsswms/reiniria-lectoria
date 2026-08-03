@@ -19,6 +19,7 @@ import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle, validatePart2ContinuationManifest } from "./m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
 import { REAL_ARTICLE_EVALUATION_SCOPE, REAL_ARTICLE_MAX_OUTPUT_TOKENS, REAL_ARTICLE_MAX_RESPONSE_BYTES } from "../src/provider/llm-call-audit.mjs";
+import { createQaEvaluationReport, finalizeProductRevision } from "../src/m5c/finalization.mjs";
 
 const USER = Object.freeze({ type: "user", id: "m5c-real-article-batch-owner" });
 const SYSTEM = Object.freeze({ type: "system", id: "m5c-real-article-batch-control-plane" });
@@ -170,7 +171,7 @@ try {
               request: { role: "qa", modelId: MODEL_ID, request, maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS,
                 thinking: mode, evaluationScope: REAL_ARTICLE_EVALUATION_SCOPE } },
             { timeoutMs: 600_000, outputBytes: REAL_ARTICLE_MAX_RESPONSE_BYTES })) });
-        const result = await qaExecutor.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID,
+        const result = await qaExecutor.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID, qaMode: mode,
           idempotencyKey: `${article.id}:qa:${mode}`, estimatedUsage: estimate(1, 200_000, REAL_ARTICLE_MAX_OUTPUT_TOKENS, 2_750_000, 600_000) });
         qa.push(pairedQaSummary(mode, result.run, result.settlement)); bundle = copies.getBundle(workflowId);
         progress(article.id, `qa-${mode}-completed`, qa.at(-1).findings.length, qa.at(-1).findings.length);
@@ -179,9 +180,12 @@ try {
       }
       if (qa[0].targetRevisionId !== qa[1].targetRevisionId) throw new Error("paired QA did not bind the same target revision");
       const budget = new TranslationFlowBudgetService(fixture.database, fixture.workspaceId).get(workflowId);
+      const evaluationReport = createQaEvaluationReport(qa); const enabled = qa.find((item) => item.mode === "enabled");
+      const finalization = finalizeProductRevision({ workflowId, qaMode: "enabled", qaRun: qaService.get(enabled.qaRunId),
+        workingCopyDigest: bundle.digest, validation, flowBudgetUsage: budget.totals, qaUsage: enabled.usage });
       const finalArtifact = artifactDocument({ article, source, bundle, phase: "qa-completed", plannerMode: planned.status,
-        contextItemCount, translationCalls: results.length, validation, qa });
-      await saveArtifact(outputRoot, article.id, Object.freeze({ ...finalArtifact, flowBudgetUsage: budget.totals }));
+        contextItemCount, translationCalls: results.length, validation, qa: [enabled] });
+      await saveArtifact(outputRoot, article.id, Object.freeze({ ...finalArtifact, productFinalization: finalization, evaluationReport }));
       completed.push(Object.freeze({ id: article.id, sourceDigest: source.digest, segmentCount: fixed.segmentCount, targetWorkingCopyDigest: bundle.digest,
         targetRevisionId: qa[0].targetRevisionId, validationFindings: validation.findings.length,
         qa: qa.map((item) => ({ mode: item.mode, findings: item.findings.length, usage: item.usage })), flowBudgetUsage: budget.totals }));

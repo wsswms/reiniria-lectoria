@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
+import { createQaEvaluationReport, finalizeProductRevision } from "../src/m5c/finalization.mjs";
 
 export const REAL_ARTICLES = Object.freeze([
   Object.freeze({ id: "nikon-omoshiro-part1", env: "M5C_REAL_ARTICLE_ONE", sourceLanguage: "ja", targetLanguage: "zh-CN", domain: "camera-optics" }),
@@ -36,6 +37,33 @@ export function pairedQaSummary(mode, run, settlement) {
   return Object.freeze({ mode, qaRunId: run.qaRunId, targetRevisionId: run.targetRevisionId, current: run.current,
     findings: Object.freeze(run.findings.map(({ layer, severity, code, segmentId, details, blocking }) =>
       Object.freeze({ layer, severity, code, segmentId, details, blocking }))), usage: Object.freeze({ ...settlement.usage }) });
+}
+
+const auditedUsage = (entry) => Object.freeze({ calls: 1, inputTokens: entry.usage.prompt_tokens, outputTokens: entry.usage.completion_tokens,
+  costMicrosCny: Math.ceil((entry.usage.prompt_tokens * 28 + entry.usage.completion_tokens * 56) / 10), costMicrosUsd: 0,
+  durationMs: Number.isSafeInteger(entry.elapsedMs) ? entry.elapsedMs : 0 });
+const addUsage = (target, value) => { for (const key of Object.keys(target)) target[key] += value[key]; return target; };
+
+export function replayAuditedArticleFinalization(checkpoint, manifest, enabledPayload) {
+  if (checkpoint?.schemaVersion !== "m5c-real-article-result-v1" || !Array.isArray(checkpoint.qa) || checkpoint.qa.length !== 1
+    || checkpoint.qa[0].mode !== "disabled" || !checkpoint.validation || typeof checkpoint.targetWorkingCopyDigest !== "string")
+    throw new Error("audited article checkpoint is invalid");
+  if (manifest?.schemaVersion !== "m5c-real-article-llm-audit-manifest-v1" || !Array.isArray(manifest.entries)
+    || manifest.entries.some((entry) => entry.status !== "completed" || entry.normalized !== true || entry.articleId !== checkpoint.id))
+    throw new Error("audited article manifest is incomplete");
+  const enabledEntry = manifest.entries.find((entry) => entry.role === "qa" && entry.thinking === "enabled");
+  if (!enabledEntry || !Array.isArray(enabledPayload?.findings)) throw new Error("enabled QA audit result is missing");
+  const disabled = checkpoint.qa[0]; const enabled = Object.freeze({ mode: "enabled", qaRunId: `audit-replay:${enabledEntry.outputDigest}`,
+    workflowId: `audit-replay:${checkpoint.id}`, targetRevisionId: disabled.targetRevisionId, status: "completed", current: true,
+    model: Object.freeze({ thinking: "enabled", auditOutputDigest: enabledEntry.outputDigest }), findings: Object.freeze(enabledPayload.findings),
+    usage: auditedUsage(enabledEntry) });
+  const totals = manifest.entries.reduce((sum, entry) => addUsage(sum, auditedUsage(entry)),
+    { calls: 0, inputTokens: 0, outputTokens: 0, costMicrosCny: 0, costMicrosUsd: 0, durationMs: 0 });
+  const productFinalization = finalizeProductRevision({ workflowId: enabled.workflowId, qaRun: enabled,
+    workingCopyDigest: checkpoint.targetWorkingCopyDigest, validation: checkpoint.validation, flowBudgetUsage: totals, qaUsage: enabled.usage });
+  const evaluationReport = createQaEvaluationReport([{ ...disabled, usage: disabled.usage }, enabled]);
+  return Object.freeze({ schemaVersion: "m5c-real-article-audit-replay-v1", status: productFinalization.status, articleId: checkpoint.id,
+    providerCalls: 0, selectedQaMode: "enabled", productFinalization, evaluationReport });
 }
 
 export function validatePart2ContinuationManifest(content, expectedDigest) {

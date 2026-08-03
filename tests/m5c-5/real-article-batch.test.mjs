@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle, validatePart2ContinuationManifest } from "../../scripts/m5c-real-article-batch.mjs";
+import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle, replayAuditedArticleFinalization, validatePart2ContinuationManifest } from "../../scripts/m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "../../scripts/m5c-real-article-audit.mjs";
 import { auditWriterForDescriptor } from "../../src/provider/llm-call-audit.mjs";
 
@@ -68,4 +68,17 @@ test("part2 continuation accepts only the exact complete 57-call part1 role matr
   assert.throws(() => validatePart2ContinuationManifest(content, `sha256:${"1".repeat(64)}`), /digest/);
   const incomplete = JSON.stringify({ schemaVersion: "m5c-real-article-llm-audit-manifest-v1", entries: entries.map((entry, index) => index ? entry : { ...entry, normalized: false }) });
   assert.throws(() => validatePart2ContinuationManifest(incomplete, `sha256:${createHash("sha256").update(incomplete).digest("hex")}`), /incomplete/);
+});
+
+test("an audited paired checkpoint replays to one enabled product result with zero provider calls", () => {
+  const zero = { calls: 1, inputTokens: 10, outputTokens: 20, costMicrosCny: 140, costMicrosUsd: 0, durationMs: 30 };
+  const checkpoint = { schemaVersion: "m5c-real-article-result-v1", id: "article", targetWorkingCopyDigest: "sha256:working",
+    validation: { validationRunId: "validator", findings: [] }, qa: [{ mode: "disabled", qaRunId: "qa-disabled", targetRevisionId: "target",
+      current: true, findings: [], usage: zero }] };
+  const entry = (thinking, digest) => ({ articleId: "article", role: "qa", thinking, status: "completed", normalized: true, outputDigest: digest,
+    usage: { prompt_tokens: 10, completion_tokens: 20 }, elapsedMs: 30 });
+  const manifest = { schemaVersion: "m5c-real-article-llm-audit-manifest-v1", entries: [entry("disabled", "sha256:disabled"), entry("enabled", "sha256:enabled")] };
+  const replay = replayAuditedArticleFinalization(checkpoint, manifest, { findings: [{ segmentId: "segment", severity: "warning", code: "risk", details: {} }] });
+  assert.equal(replay.providerCalls, 0); assert.equal(replay.productFinalization.selectedQaMode, "enabled");
+  assert.equal(replay.productFinalization.qa.findings, 1); assert.equal(replay.evaluationReport.scope, "evaluation-only");
 });
