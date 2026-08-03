@@ -30,6 +30,8 @@ const FIXED = Object.freeze({
 
 const estimate = (calls, inputTokens, outputTokens, costMicrosCny, durationMs) =>
   ({ calls, inputTokens, outputTokens, costMicrosCny, costMicrosUsd: 0, durationMs });
+const progress = (documentId, phase, completed, total) => process.stderr.write(`${JSON.stringify({ type: "progress", documentId, phase,
+  ...(completed === undefined ? {} : { completed, total }) })}\n`);
 
 function articleBudget(segmentCount) {
   const zero = Object.freeze({ maxCalls: 0, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 0 });
@@ -85,6 +87,7 @@ try {
   for (const { article, source, fixed } of sources) {
     currentDocumentId = article.id; stage = "workspace"; const fixture = await applicationWorkspace(`lectoria-${article.id}-real-`);
     try {
+      progress(article.id, "started");
       const imported = await fixture.imports.import({ format: "text", content: source.content, title: article.id }); fixture.imports.confirm(imported.importId, USER);
       const actualSegments = fixture.database.prepare("SELECT count(*) AS count FROM source_segment_versions WHERE workspace_id = ? AND source_revision_id = ? AND translatable = 1")
         .get(fixture.workspaceId, imported.sourceRevisionId).count;
@@ -99,6 +102,7 @@ try {
       const planned = await planner.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID, idempotencyKey: `${article.id}:planner`,
         estimatedUsage: estimate(1, 100_000, 4_096, 30_000, 120_000) });
       if (planned.status !== "model-assisted") throw Object.assign(new Error("real article Planner did not complete"), { category: planned.category ?? "provider" });
+      progress(article.id, "planner-completed", 1, 1);
       flow = plans.submitPlan(workflowId, planned.plan.planHead.version, SYSTEM); flow = plans.decidePlan(workflowId, flow.planHead.version, "approved", USER);
 
       stage = "context"; const contexts = new TemporaryContextService(fixture.database, fixture.workspaceId); let context = contexts.assemble(workflowId, {}, SYSTEM);
@@ -120,7 +124,9 @@ try {
       while (true) {
         const result = await executor.executeNext(); if (result.status === "idle") break;
         if (result.status !== "completed") throw Object.assign(new Error("real article translation did not complete"), { category: result.error?.category ?? result.status });
-        results.push(result);
+        results.push(result); if (results.length === 1 || results.length % 10 === 0 || results.length === fixed.segmentCount) {
+          progress(article.id, "translation", results.length, fixed.segmentCount);
+        }
       }
       if (results.length !== fixed.segmentCount) throw new Error("real article translation call count mismatch");
       const copies = new WorkCopyService(fixture.database, fixture.workspaceId);
@@ -135,6 +141,7 @@ try {
       stage = "validation"; const validationService = new ValidationService(fixture.database, fixture.workspaceId, { workCopies: copies });
       const validationRun = validationService.run(workflowId); const validation = Object.freeze({ validationRunId: validationRun.validationRunId,
         findings: Object.freeze(validationRun.findings.map(({ severity, code, segmentId, details }) => Object.freeze({ severity, code, segmentId, details }))) });
+      progress(article.id, "validation-completed", validation.findings.length, validation.findings.length);
 
       stage = "paired-qa"; const qaService = new M5CQAService(fixture.database, fixture.workspaceId, { workCopies: copies }); const qa = [];
       for (const mode of MODES) {
@@ -144,6 +151,7 @@ try {
         const result = await qaExecutor.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID,
           idempotencyKey: `${article.id}:qa:${mode}`, estimatedUsage: estimate(1, 200_000, 16_384, 60_000, 180_000) });
         qa.push(pairedQaSummary(mode, result.run, result.settlement)); bundle = copies.getBundle(workflowId);
+        progress(article.id, `qa-${mode}-completed`, qa.at(-1).findings.length, qa.at(-1).findings.length);
         await saveArtifact(outputRoot, article.id, artifactDocument({ article, source, bundle, phase: `qa-${mode}`, plannerMode: planned.status,
           contextItemCount, translationCalls: results.length, validation, qa }));
       }
@@ -155,6 +163,7 @@ try {
       completed.push(Object.freeze({ id: article.id, sourceDigest: source.digest, segmentCount: fixed.segmentCount, targetWorkingCopyDigest: bundle.digest,
         targetRevisionId: qa[0].targetRevisionId, validationFindings: validation.findings.length,
         qa: qa.map((item) => ({ mode: item.mode, findings: item.findings.length, usage: item.usage })), flowBudgetUsage: budget.totals }));
+      progress(article.id, "completed");
     } finally { await fixture.close(); }
   }
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-article-batch-result-v1", status: "completed-awaiting-user-disposition",
