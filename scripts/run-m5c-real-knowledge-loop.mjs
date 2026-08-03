@@ -81,12 +81,13 @@ async function researchNeed({ fixture, plans, needs, need, article, braveKeyPath
     allowedDomains: [article.expectedHost], allowedLanguages: ["ja"], approvedBy: USER, approvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 300_000).toISOString() };
   const issued = bridge.issueGrant(request.request.requestId, grantInput, USER);
+  const grantId = issued.grant.grant.grantId;
   const created = bridge.createRun(request.request.requestId, contentDigest({ needId: need.needId, ordinal }), SYSTEM);
   const started = bridge.startRun(request.request.requestId, created.run.runId, SYSTEM);
   const reservationId = `search:${article.id}:${ordinal}:${need.needId}`; const details = { runId: started.run.runId,
     providerId: "brave-search", round: 1, query: article.query, language: "ja", country: "JP", idempotencyKey: reservationId };
   const usage = estimate(1, 0, 0, 0, BRAVE_COST_MICROS_USD_PER_CALL, 60_000);
-  const reserved = bridge.reserveOperation(request.request.requestId, issued.grant.grantId, "search", reservationId, usage, details);
+  const reserved = bridge.reserveOperation(request.request.requestId, grantId, "search", reservationId, usage, details);
   const adapter = createRealBraveGatewayAdapter({ credentialPath: braveKeyPath, costMicrosUsdPerCall: BRAVE_COST_MICROS_USD_PER_CALL,
     brokerOptions: { timeoutMs: 30_000 } });
   const startedAt = Date.now(); const response = await adapter.search({ query: article.query, count: 10, country: "JP", searchLanguage: "ja" });
@@ -99,12 +100,12 @@ async function researchNeed({ fixture, plans, needs, need, article, braveKeyPath
   const quote = `${selected.title}\n${selected.description}`; const citation = evidence.cite(source.sourceId, { quote, locator: { start: 0, end: quote.length } });
   const claim = evidence.claim(started.run.runId, { text: quote, citationIds: [citation.citationId], inference: false,
     disputed: false, insufficient: false, narrowOfficial: true });
-  const totals = new ResearchBudgetService(fixture.database, fixture.workspaceId).totals(issued.grant.grantId);
+  const totals = new ResearchBudgetService(fixture.database, fixture.workspaceId).totals(grantId);
   const report = evidence.report(started.run.runId, { questionAnswers: [{ question: need.question, answer: quote, status: "supported" }],
     claimIds: [claim.claimId], usage: totals });
   bridge.runs.transition(started.run.runId, "completed", { details: { reportId: report.reportId }, actor: SYSTEM });
   return Object.freeze({ needId: need.needId, planRevisionId: promoted.planBinding.planRevisionId, requestId: request.request.requestId,
-    grantId: issued.grant.grantId, runId: started.run.runId, query: article.query, responseDigest: response.responseDigest,
+    grantId, runId: started.run.runId, query: article.query, responseDigest: response.responseDigest,
     selectedUrl: selected.url, selectedResultDigest: selected.resultDigest, claimId: claim.claimId, supportLevel: claim.supportLevel,
     reportId: report.reportId, outcome: report.outcome, usage: totals });
 }

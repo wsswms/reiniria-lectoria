@@ -8,11 +8,15 @@ import { ContextDispositionService } from "../../src/m5c/context-disposition-ser
 import { FlowRecoveryService } from "../../src/m5c/flow-recovery-service.mjs";
 import { TranslationFlowBudgetService } from "../../src/m5c/flow-budget-service.mjs";
 import { FlowPlanService } from "../../src/m5c/flow-plan-service.mjs";
+import { CandidateKnowledgeNeedService } from "../../src/m5c/candidate-knowledge-need-service.mjs";
 import { M5CResearchBridgeService } from "../../src/m5c/research-bridge-service.mjs";
 import { TemporaryContextService } from "../../src/m5c/temporary-context-service.mjs";
 import { contentDigest } from "../../src/m5c/contracts.mjs";
 import { FtsRetriever } from "../../src/knowledge/fts-retriever.mjs";
 import { DomainStateService } from "../../src/domain/state-service.mjs";
+import { ResearchBudgetService } from "../../src/research/budget-service.mjs";
+import { ResearchEvidenceService } from "../../src/research/evidence-service.mjs";
+import { WebSearchArtifactService } from "../../src/research/web-search-artifact-service.mjs";
 import { setup } from "../m5c-1/helpers.mjs";
 
 const user = Object.freeze({ type: "user", id: "m5c-owner" });
@@ -87,6 +91,49 @@ test("research requests can only originate from an approved current Plan and cre
       categories: Object.fromEntries(Object.entries(limits.categories).map(([key, value]) => [key, { ...value }])) }, user);
     assert.equal(new FlowRecoveryService(fixture.database, fixture.workspaceId)
       .resolve(fixture.workflowId, flowControl.version, "retry", null, user).flowState, "research");
+  } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a user-selected Planner uncertainty completes the search-snippet evidence and Report chain", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-m5c-planner-research-")); const fixture = setup(join(root, "app.sqlite3"));
+  try {
+    const { service: plans } = approvedPlan(fixture); const needs = new CandidateKnowledgeNeedService(fixture.database, fixture.workspaceId);
+    let need = needs.capturePlan(fixture.workflowId).find((item) => item.impact === "high"); assert.ok(need);
+    need = needs.decide(need.needId, "research", { reason: "offline full-chain fixture" }, user); needs.promoteResearchNeed(need.needId);
+    let plan = plans.get(fixture.workflowId); plan = plans.submitPlan(fixture.workflowId, plan.planHead.version, system);
+    plans.decidePlan(fixture.workflowId, plan.planHead.version, "approved", user); let request = needs.createResearchRequest(need.needId);
+    const bridge = new M5CResearchBridgeService(fixture.database, fixture.workspaceId); request = bridge.submit(request.request.requestId, request.head.version, system);
+    request = bridge.decide(request.request.requestId, request.head.version, "approved", user); const now = new Date();
+    const issued = bridge.issueGrant(request.request.requestId, { schemaVersion: "1.0", grantId: randomUUID(), requestId: request.request.requestId,
+      requestRevisionId: request.head.requestRevisionId, providers: [{ capability: "search", providerId: "brave-search", fallbackOrder: 0,
+        budget: { maxSearchCalls: 1, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 5_000 } }],
+      limits: { maxRounds: 1, maxSearchCalls: 1, maxResultsPerSearch: 10, maxContentUrls: 1, maxDurationSeconds: 300,
+        maxRuns: 1, maxModelTokens: 0, maxCostMicrosUsd: 5_000 }, allowedDomains: ["nij.nikon.com"], allowedLanguages: ["ja"],
+      approvedBy: user, approvedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 300_000).toISOString() }, user);
+    const run = bridge.startRun(request.request.requestId,
+      bridge.createRun(request.request.requestId, contentDigest({ fixture: "planner-research" }), system).run.runId, system).run;
+    const reservationId = `search:fixture:${need.needId}`; const usage = { calls: 1, inputTokens: 0, outputTokens: 0,
+      costMicrosCny: 0, costMicrosUsd: 5_000, durationMs: 60_000 };
+    const grantId = issued.grant.grant.grantId;
+    const reserved = bridge.reserveOperation(request.request.requestId, grantId, "search", reservationId, usage,
+      { runId: run.runId, providerId: "brave-search", round: 1, query: "site:nij.nikon.com Nikon", language: "ja", country: "JP", idempotencyKey: reservationId });
+    const response = { adapterId: "brave-search", adapterVersion: "brave-web-search-v1", responseDigest: contentDigest({ fixture: "search" }),
+      results: [{ rank: 1, title: "Nikon official", url: "https://nij.nikon.com/enjoy/life/historynikkor/0052/", description: "Official lens article" }],
+      usage: { searchCalls: 1, contentUrls: 0, modelTokens: 0, costMicrosUsd: 5_000 } };
+    const artifact = new WebSearchArtifactService(fixture.database, fixture.workspaceId).recordResearch(reserved.research.queryId, response);
+    bridge.settleOperation(request.request.requestId, reservationId, { ...usage, durationMs: 1_000 }, { responseDigest: response.responseDigest });
+    const selected = artifact.results[0]; const evidence = new ResearchEvidenceService(fixture.database, fixture.workspaceId);
+    const source = evidence.addSource(run.runId, reserved.research.queryId, { canonicalUrl: selected.url, tier: "S1",
+      lineage: "search-snippet", artifactType: "search-result", artifactId: selected.resultId });
+    const quote = `${selected.title}\n${selected.description}`; const citation = evidence.cite(source.sourceId,
+      { quote, locator: { start: 0, end: quote.length } });
+    const claim = evidence.claim(run.runId, { text: quote, citationIds: [citation.citationId], inference: false,
+      disputed: false, insufficient: false, narrowOfficial: true });
+    const totals = new ResearchBudgetService(fixture.database, fixture.workspaceId).totals(grantId);
+    const report = evidence.report(run.runId, { questionAnswers: [{ question: need.question, answer: quote, status: "supported" }],
+      claimIds: [claim.claimId], usage: totals });
+    assert.equal(report.outcome, "supported"); assert.equal(claim.supportLevel, "C2"); assert.equal(totals.searchCalls, 1);
+    assert.equal(bridge.runs.transition(run.runId, "completed", { details: { reportId: report.reportId }, actor: system }).state, "completed");
   } finally { fixture.database.close(); await rm(root, { recursive: true, force: true }); }
 });
 
