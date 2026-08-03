@@ -17,6 +17,7 @@ const SYSTEM_INSTRUCTION = [
   "kind must be exactly term, entity, fact, relation, or measurement; use term for terminology questions and omit style-only uncertainties. impact must be exactly critical, high, medium, or low.",
   "question must contain 1 to 512 characters. relatedSegmentIds must be a non-empty unique array using only supplied segmentIds and must include the segmentId of its owning candidate. Do not repeat the same kind and question in one candidate.",
   "Never authorize research or network access; use an empty array when no investigation is needed.",
+  "Every ASCII double quote inside a JSON string must be escaped according to JSON; prefer target-language quotation marks in translated prose.",
   "Close every JSON array and object; the final two non-whitespace characters of the response must be ]}.",
   'Example JSON: {"candidates":[{"segmentId":"00000000-0000-4000-8000-000000000000","text":"translated text","knowledgeNeeds":[]}]}.',
 ].join(" ");
