@@ -11,10 +11,11 @@ export const PLANNER_EXPERIMENT_CONFIRM_CALLS = 12;
 export const PLANNER_EXPERIMENT_MAX_CALLS = 60;
 export const PLANNER_EXPERIMENT_MAX_CONCURRENCY = 4;
 export const PLANNER_EXPERIMENT_MAX_COST_MICROS_CNY = 15_000_000;
+export const PLANNER_EXPERIMENT_UNKNOWN_COST_RESERVATION_MICROS_CNY = 500_000;
 
 const sha = (value) => `sha256:${createHash("sha256").update(typeof value === "string" ? value : stableJson(value)).digest("hex")}`;
 
-export function buildPlannerExperimentMatrix(documents, { phase = "initial", promptVariant, temperature } = {}) {
+export function buildPlannerExperimentMatrix(documents, { phase = "initial", promptVariant, temperature, skipAttempts = 0 } = {}) {
   if (!Array.isArray(documents) || documents.length !== 4 || new Set(documents.map((item) => item.document.documentId)).size !== 4) {
     throw new TypeError("Planner experiment requires four unique coverages");
   }
@@ -31,9 +32,18 @@ export function buildPlannerExperimentMatrix(documents, { phase = "initial", pro
       promptVariant: variant, temperature: value, coverage }));
   }
   const expected = phase === "initial" ? PLANNER_EXPERIMENT_INITIAL_CALLS : PLANNER_EXPERIMENT_CONFIRM_CALLS;
-  if (tasks.length !== expected) throw new Error("Planner experiment matrix size mismatch");
-  return Object.freeze(tasks.map((task, index) => Object.freeze({ ...task, sequence: index + 1,
+  if (tasks.length !== expected || !Number.isSafeInteger(skipAttempts) || skipAttempts < 0 || skipAttempts > (phase === "initial" ? 0 : 4)) {
+    throw new Error("Planner experiment matrix size mismatch");
+  }
+  return Object.freeze(tasks.slice(skipAttempts).map((task, index) => Object.freeze({ ...task, sequence: index + 1,
     taskId: `${phase}-${String(index + 1).padStart(3, "0")}-${task.documentId.slice(-4)}-${task.promptVariant}-t${task.temperature}-r${task.repeat}` })));
+}
+
+export function plannerExperimentBudgetExposure({ knownCostMicrosCny, unknownUsageCalls }) {
+  if (!Number.isSafeInteger(knownCostMicrosCny) || knownCostMicrosCny < 0 || !Number.isSafeInteger(unknownUsageCalls) || unknownUsageCalls < 0) {
+    throw new TypeError("Planner experiment budget exposure is invalid");
+  }
+  return knownCostMicrosCny + unknownUsageCalls * PLANNER_EXPERIMENT_UNKNOWN_COST_RESERVATION_MICROS_CNY;
 }
 export function plannerExperimentPromptMetrics(coverages) {
   if (!Array.isArray(coverages) || coverages.length !== 4) throw new TypeError("prompt metrics require four coverages");

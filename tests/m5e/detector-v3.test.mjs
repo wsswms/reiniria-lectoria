@@ -13,7 +13,7 @@ import {
   buildDetectorV3LiteModelInput,
   normalizeDetectorV3LitePayload,
 } from "../../src/m5e/detector-v3-lite.mjs";
-import { buildPlannerExperimentMatrix, plannerExperimentPromptMetrics } from "../../src/m5e/planner-prompt-experiment.mjs";
+import { buildPlannerExperimentMatrix, plannerExperimentBudgetExposure, plannerExperimentPromptMetrics } from "../../src/m5e/planner-prompt-experiment.mjs";
 import { invokeM5EDetectorV3DeepSeek } from "../../scripts/m5e-detector-v3-deepseek.mjs";
 import { KnowledgeFactService } from "../../src/knowledge/fact-service.mjs";
 import { FtsRetriever } from "../../src/knowledge/fts-retriever.mjs";
@@ -149,6 +149,9 @@ test("Planner prompt experiment fixes a balanced 48-call initial matrix and 12-c
   }
   const confirmation = buildPlannerExperimentMatrix(coverages, { phase: "confirmation", promptVariant: "lite-v1", temperature: 1 });
   assert.equal(confirmation.length, 12); assert.ok(confirmation.every((item) => item.promptVariant === "lite-v1" && item.temperature === 1));
+  const resumed = buildPlannerExperimentMatrix(coverages, { phase: "confirmation", promptVariant: "lite-v1", temperature: 1, skipAttempts: 4 });
+  assert.equal(resumed.length, 8); assert.ok(resumed.every((item) => item.repeat >= 2));
+  assert.equal(plannerExperimentBudgetExposure({ knownCostMicrosCny: 10_000_000, unknownUsageCalls: 4 }), 12_000_000);
 });
 
 test("Planner prompt metrics show Lite removes model-facing control-plane overhead", () => {
@@ -260,4 +263,14 @@ test("Detector v3 DeepSeek adapter applies Lite payload validation and temperatu
     maximumAttempts: 1, promptVariant: "lite-v1", temperature: 1 }, { credential: "fixture-key", fetchImpl });
   assert.equal(requests.length, 1); assert.equal(requests[0].temperature, 1); assert.match(requests[0].messages[0].content, /Complete valid example/);
   assert.equal(result.items[0].issue, "preferred-translation"); assert.equal(result.usage.calls, 1);
+});
+
+test("Detector v3 DeepSeek adapter classifies response-body read failure as an unknown outcome without retry", async () => {
+  const coverage = assembleDetectorV3Coverage({ document, approvedTerms, retriever }); let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: true, status: 200, headers: { get: () => null, entries: () => [] },
+    arrayBuffer: async () => { throw Object.assign(new Error("socket closed"), { code: "ECONNRESET" }); } }; };
+  await assert.rejects(() => invokeM5EDetectorV3DeepSeek({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 65_536,
+    maximumAttempts: 1, promptVariant: "current-v1", temperature: 1 }, { credential: "fixture-key", fetchImpl }),
+  (error) => error.category === "unknown-outcome" && error.retryable === false);
+  assert.equal(calls, 1);
 });

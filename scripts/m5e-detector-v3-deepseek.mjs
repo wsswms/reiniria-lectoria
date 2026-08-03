@@ -71,7 +71,9 @@ export async function invokeM5EDetectorV3DeepSeek(input, { credential, fetchImpl
       catch (error) { throw signal?.aborted || error?.name === "AbortError" ? fail("canceled") : fail("unknown-outcome", error?.cause?.code ?? error?.code); }
       if (!response || typeof response.status !== "number") throw fail("malformed-response", "response");
       const declared = Number(response.headers?.get?.("content-length")); if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw fail("malformed-response", "response-size");
-      const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > MAX_RESPONSE_BYTES) throw fail("malformed-response", "response-size");
+      let bytes; try { bytes = Buffer.from(await response.arrayBuffer()); }
+      catch (error) { throw signal?.aborted || error?.name === "AbortError" ? fail("canceled") : fail("unknown-outcome", error?.cause?.code ?? error?.code); }
+      if (bytes.length > MAX_RESPONSE_BYTES) throw fail("malformed-response", "response-size");
       rawText = bytes.toString("utf8"); try { raw = JSON.parse(rawText); } catch { if (response.ok) throw fail("malformed-response", "outer-json"); }
       if (!response.ok) throw http(response.status);
       try { observedUsage = usage(raw?.usage, Date.now() - started); } catch {}

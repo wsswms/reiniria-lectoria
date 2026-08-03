@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { openCredentialFile } from "../src/provider/credential-file.mjs";
 import { invokeM5CModelBroker } from "../src/m5c/model-broker-process.mjs";
 import { assembleDetectorV3Coverage, buildDetectorV3Plan } from "../src/m5e/detector-v3.mjs";
 import {
   buildPlannerExperimentMatrix,
+  plannerExperimentBudgetExposure,
   plannerExperimentPromptMetrics,
   PLANNER_EXPERIMENT_INITIAL_CALLS,
   PLANNER_EXPERIMENT_CONFIRM_CALLS,
@@ -49,7 +50,8 @@ async function priorReport(path, expectedDigest) {
 }
 function usageFromEvents(events) {
   const values = events.filter((event) => event.event === "response").map((event) => event.response?.usage).filter(Boolean);
-  if (values.length !== 1) throw new Error("Planner experiment requires exactly one billed response per task");
+  if (values.length === 0) return null;
+  if (values.length !== 1) throw new Error("Planner experiment has multiple billed responses for one task");
   const item = values[0]; const inputTokens = item.prompt_tokens, outputTokens = item.completion_tokens, totalTokens = item.total_tokens;
   if (![inputTokens, outputTokens, totalTokens].every((value) => Number.isSafeInteger(value) && value >= 0) || inputTokens + outputTokens !== totalTokens) {
     throw new Error("Planner experiment usage is invalid");
@@ -59,7 +61,10 @@ function usageFromEvents(events) {
     costMicrosCny: Math.ceil((inputTokens * 28 + outputTokens * 56) / 10),
     durationMs: events.filter((event) => event.event === "response").reduce((sum, event) => sum + (event.elapsedMs ?? 0), 0) });
 }
-function add(target, value) { for (const field of COST_FIELDS) target[field] += value[field]; }
+function add(target, value) {
+  target.calls += 1; if (!value) { target.unknownUsageCalls += 1; return; }
+  for (const field of COST_FIELDS.filter((field) => field !== "calls")) target[field] += value[field];
+}
 function summary(plan) {
   const resolutions = Object.fromEntries([...new Set(plan.knowledgeIdentities.map((item) => item.resolution))].sort()
     .map((value) => [value, plan.knowledgeIdentities.filter((item) => item.resolution === value).length]));
@@ -91,28 +96,58 @@ async function executeTask(task, credentialFd, output) {
     usage, auditFile: auditPath.split("/").at(-1), auditDigest: sha(bytes), plan: planSummary });
 }
 
+async function interruptedWave(root, expectedDigest) {
+  if (typeof root !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(expectedDigest ?? "")) throw new Error("Interrupted wave configuration is invalid");
+  const stat = await lstat(root); if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
+    throw new Error("Interrupted wave directory is invalid");
+  }
+  const names = (await readdir(root)).sort(); const expectedNames = [1, 2, 3, 4].map((ordinal) => `${String(ordinal).padStart(4, "0")}-confirmation-${String(ordinal).padStart(3, "0")}-000${ordinal + 1}-current-v1-t1-r1.jsonl`);
+  if (JSON.stringify(names) !== JSON.stringify(expectedNames)) throw new Error("Interrupted wave files are invalid");
+  const files = []; let responseEvents = 0;
+  for (const name of names) {
+    const path = join(root, name); const itemStat = await lstat(path);
+    if (!itemStat.isFile() || itemStat.isSymbolicLink() || itemStat.uid !== process.getuid() || (itemStat.mode & 0o077) !== 0) throw new Error("Interrupted wave file is invalid");
+    const bytes = await readFile(path); const events = bytes.toString("utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    if (events.filter((event) => event.event === "request").length !== 1) throw new Error("Interrupted wave request evidence is invalid");
+    const responses = events.filter((event) => event.event === "response"); if (responses.length > 1 || responses.some((event) => event.response?.usage != null)) {
+      throw new Error("Interrupted wave response evidence is invalid");
+    }
+    responseEvents += responses.length; files.push(Object.freeze({ name, digest: sha(bytes), eventCount: events.length }));
+  }
+  const value = Object.freeze({ files: Object.freeze(files), responseEvents, consumedAttempts: names.length });
+  if (sha(value) !== expectedDigest || responseEvents !== 1) throw new Error("Interrupted wave digest mismatch"); return value;
+}
+
 const mode = process.env.M5E_PLANNER_EXPERIMENT_MODE;
-if (!new Set(["dry-run", "execute-initial", "execute-confirmation"]).has(mode)) throw new Error("Planner experiment mode is invalid");
+if (!new Set(["dry-run", "dry-run-resume", "execute-initial", "execute-confirmation", "execute-confirmation-resume"]).has(mode)) throw new Error("Planner experiment mode is invalid");
 let fixture; let credential;
 try {
   fixture = await createDetectorV3Fixture(process.env.M5E_DETECTOR_V3_CORPUS);
   const coverages = fixture.documents.map((document) => assembleDetectorV3Coverage({ document, approvedTerms: fixture.approvedTerms, retriever: fixture.retriever }));
-  const confirmation = mode === "execute-confirmation"; const selectedTemperature = Number(process.env.M5E_PLANNER_EXPERIMENT_TEMPERATURE);
+  const confirmation = mode === "execute-confirmation" || mode === "execute-confirmation-resume" || mode === "dry-run-resume";
+  const selectedTemperature = Number(process.env.M5E_PLANNER_EXPERIMENT_TEMPERATURE);
+  const interrupted = mode === "execute-confirmation-resume" || mode === "dry-run-resume" ? await interruptedWave(process.env.M5E_PLANNER_EXPERIMENT_INTERRUPTED_WAVE,
+    process.env.M5E_PLANNER_EXPERIMENT_INTERRUPTED_WAVE_DIGEST) : null;
   const tasks = buildPlannerExperimentMatrix(coverages, confirmation ? { phase: "confirmation",
-    promptVariant: process.env.M5E_PLANNER_EXPERIMENT_PROMPT_VARIANT, temperature: selectedTemperature } : undefined);
+    promptVariant: process.env.M5E_PLANNER_EXPERIMENT_PROMPT_VARIANT, temperature: selectedTemperature,
+    skipAttempts: interrupted?.consumedAttempts ?? 0 } : undefined);
   const promptMetrics = plannerExperimentPromptMetrics(coverages);
-  if (mode === "dry-run") {
+  const priorPreflight = mode === "dry-run-resume" ? await priorReport(process.env.M5E_PLANNER_EXPERIMENT_PRIOR_REPORT,
+    process.env.M5E_PLANNER_EXPERIMENT_PRIOR_REPORT_DIGEST) : null;
+  if (mode === "dry-run" || mode === "dry-run-resume") {
     process.stdout.write(`${JSON.stringify({ schemaVersion: `${PLANNER_EXPERIMENT_VERSION}-preflight`, status: "ready",
       corpusDigest: fixture.corpusDigest, factSetDigest: fixture.manifest.factSetDigest, modelId: PLANNER_EXPERIMENT_MODEL,
       thinking: "enabled", actualAttempts: tasks.length, expectedActualAttempts: PLANNER_EXPERIMENT_INITIAL_CALLS,
       maximumConcurrency: PLANNER_EXPERIMENT_MAX_CONCURRENCY, maximumCostMicrosCny: PLANNER_EXPERIMENT_MAX_COST_MICROS_CNY,
       maximumOutputTokens: PLANNER_EXPERIMENT_MAX_OUTPUT_TOKENS, promptMetrics, credentialRead: false,
+      priorReportDigest: priorPreflight?.fileDigest ?? null, interruptedWave: interrupted ? {
+        digest: process.env.M5E_PLANNER_EXPERIMENT_INTERRUPTED_WAVE_DIGEST, consumedAttempts: interrupted.consumedAttempts } : null,
       braveCalls: 0, fetchCalls: 0, translationCalls: 0, qaCalls: 0, researchCalls: 0 })}\n`);
   } else {
     const prior = confirmation ? await priorReport(process.env.M5E_PLANNER_EXPERIMENT_PRIOR_REPORT,
       process.env.M5E_PLANNER_EXPERIMENT_PRIOR_REPORT_DIGEST) : null;
     const output = await privateOutput(process.env.M5E_PLANNER_EXPERIMENT_OUTPUT_DIR); credential = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE);
-    const totals = Object.fromEntries(COST_FIELDS.map((field) => [field, 0])); const entries = [];
+    const totals = { ...Object.fromEntries(COST_FIELDS.map((field) => [field, 0])), unknownUsageCalls: 0 }; const entries = [];
     for (let cursor = 0; cursor < tasks.length; cursor += PLANNER_EXPERIMENT_MAX_CONCURRENCY) {
       const wave = tasks.slice(cursor, cursor + PLANNER_EXPERIMENT_MAX_CONCURRENCY);
       const results = await Promise.all(wave.map((task) => executeTask(task, credential.fd, output)));
@@ -121,11 +156,12 @@ try {
         corpusDigest: fixture.corpusDigest, entries, totals });
       process.stderr.write(`${JSON.stringify({ type: "progress", completed: entries.length, successful: entries.filter((item) => item.status === "completed").length,
         costMicrosCny: totals.costMicrosCny })}\n`);
-      const cumulativeCalls = (prior?.value.totals.calls ?? 0) + totals.calls;
+      const cumulativeCalls = (prior?.value.totals.calls ?? 0) + (interrupted?.consumedAttempts ?? 0) + totals.calls;
       const cumulativeCost = (prior?.value.totals.costMicrosCny ?? 0) + totals.costMicrosCny;
-      const phaseMaximum = confirmation ? PLANNER_EXPERIMENT_CONFIRM_CALLS : PLANNER_EXPERIMENT_INITIAL_CALLS;
+      const phaseMaximum = confirmation ? PLANNER_EXPERIMENT_CONFIRM_CALLS - (interrupted?.consumedAttempts ?? 0) : PLANNER_EXPERIMENT_INITIAL_CALLS;
       if (totals.calls !== entries.length || totals.calls > phaseMaximum || cumulativeCalls > PLANNER_EXPERIMENT_MAX_CALLS
-        || cumulativeCost > PLANNER_EXPERIMENT_MAX_COST_MICROS_CNY) {
+        || plannerExperimentBudgetExposure({ knownCostMicrosCny: cumulativeCost,
+          unknownUsageCalls: (interrupted?.consumedAttempts ?? 0) + totals.unknownUsageCalls }) > PLANNER_EXPERIMENT_MAX_COST_MICROS_CNY) {
         throw Object.assign(new Error("Planner experiment budget exceeded"), { category: "budget" });
       }
     }
@@ -134,7 +170,13 @@ try {
       phase: confirmation ? "confirmation" : "initial", selectedConfiguration: confirmation ? {
         promptVariant: process.env.M5E_PLANNER_EXPERIMENT_PROMPT_VARIANT, temperature: selectedTemperature } : null,
       prior: prior ? { reportFileDigest: prior.fileDigest, calls: prior.value.totals.calls, costMicrosCny: prior.value.totals.costMicrosCny } : null,
-      cumulativeTotals: prior ? Object.fromEntries(COST_FIELDS.map((field) => [field, prior.value.totals[field] + totals[field]])) : totals,
+      interrupted: interrupted ? { digest: process.env.M5E_PLANNER_EXPERIMENT_INTERRUPTED_WAVE_DIGEST,
+        consumedAttempts: interrupted.consumedAttempts, responseEvents: interrupted.responseEvents } : null,
+      cumulativeTotals: prior ? { ...Object.fromEntries(COST_FIELDS.map((field) => [field, prior.value.totals[field] + totals[field]])),
+        calls: prior.value.totals.calls + (interrupted?.consumedAttempts ?? 0) + totals.calls,
+        unknownUsageCalls: (interrupted?.consumedAttempts ?? 0) + totals.unknownUsageCalls,
+        budgetExposureMicrosCny: plannerExperimentBudgetExposure({ knownCostMicrosCny: prior.value.totals.costMicrosCny + totals.costMicrosCny,
+          unknownUsageCalls: (interrupted?.consumedAttempts ?? 0) + totals.unknownUsageCalls }) } : totals,
       maximums: { actualAttempts: confirmation ? PLANNER_EXPERIMENT_CONFIRM_CALLS : PLANNER_EXPERIMENT_INITIAL_CALLS,
         cumulativeActualAttempts: PLANNER_EXPERIMENT_MAX_CALLS, concurrency: PLANNER_EXPERIMENT_MAX_CONCURRENCY,
         costMicrosCny: PLANNER_EXPERIMENT_MAX_COST_MICROS_CNY, outputTokens: PLANNER_EXPERIMENT_MAX_OUTPUT_TOKENS },
