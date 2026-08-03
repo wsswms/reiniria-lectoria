@@ -59,6 +59,7 @@ test("DeepSeek request uses fixed endpoint, bearer auth and JSON Object mode wit
   assert.match(body.messages[0].content, /use term for terminology questions and omit style-only uncertainties/);
   assert.match(body.messages[0].content, /relatedSegmentIds must be a non-empty unique array/);
   assert.match(body.messages[0].content, /must include the segmentId of its owning candidate/);
+  assert.match(body.messages[0].content, /final two non-whitespace characters.*\]\}/);
   for (const id of [input.workspaceId, input.taskId, input.attemptId, input.workflowId, input.sourceRevisionId]) {
     assert.equal(observation.init.body.includes(id), false);
   }
