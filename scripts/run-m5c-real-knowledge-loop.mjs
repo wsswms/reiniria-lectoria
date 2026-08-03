@@ -9,6 +9,7 @@ import { FlowPlanService } from "../src/m5c/flow-plan-service.mjs";
 import { M5CPlannerExecutor } from "../src/m5c/planner-executor.mjs";
 import { TemporaryContextService } from "../src/m5c/temporary-context-service.mjs";
 import { TranslationFlowBudgetService } from "../src/m5c/flow-budget-service.mjs";
+import { FlowRecoveryService } from "../src/m5c/flow-recovery-service.mjs";
 import { contentDigest } from "../src/m5c/contracts.mjs";
 import { CandidateKnowledgeNeedService } from "../src/m5c/candidate-knowledge-need-service.mjs";
 import { M5CQAService } from "../src/m5c/qa-service.mjs";
@@ -26,8 +27,8 @@ import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, readPrivateArticle } from "./m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
 import { KNOWLEDGE_LOOP_ARTICLES, BRAVE_COST_MICROS_USD_PER_CALL,
-  MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, ROLE_OUTPUT_TOKENS, TRANSLATION_OUTPUT_TOKENS, digest,
-  knowledgeLoopArticleBudget, knowledgeLoopLimits, selectOfficialSearchResult,
+  MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, ROLE_OUTPUT_TOKENS, TRANSLATION_OUTPUT_TOKENS, USER_RECOVERY_MODE, digest,
+  expandedKnowledgeLoopRecoveryPolicy, knowledgeLoopArticleBudget, knowledgeLoopLimits, selectOfficialSearchResult,
   researchStepFailure, summarizeKnowledgeNeeds } from "./m5c-real-knowledge-loop.mjs";
 import { PRODUCTION_RESPONSE_BYTES_CEILING } from "../src/m5c/role-policy.mjs";
 
@@ -121,7 +122,7 @@ function addProviderBudget(pricing, articleId, suffix, hardLimitMicros) {
 }
 
 async function executeTranslations({ fixture, workflowId, contexts, pricing, credential, audit, article, segmentIds, category, idempotencyKey }) {
-  const policyVersion = addProviderBudget(pricing, article.id, idempotencyKey, category === "translation" ? 15_000_000 : 10_000_000);
+  let policyVersion = addProviderBudget(pricing, article.id, idempotencyKey, category === "translation" ? 15_000_000 : 10_000_000);
   const queued = contexts.enqueueTranslation(workflowId, { segmentIds, providerId: "deepseek", modelId: MODEL_ID, policyVersion,
     idempotencyKey, maxAttempts: 1, batchSize: 1, budgetCategory: category,
     estimatedUsage: estimate(segmentIds.length, 500_000, segmentIds.length * TRANSLATION_OUTPUT_TOKENS, 10_000_000, 0, segmentIds.length * 180_000) });
@@ -132,17 +133,43 @@ async function executeTranslations({ fixture, workflowId, contexts, pricing, cre
       { articleId: article.id, role: category, thinking: "disabled", segmentId: request.segments[0].segmentId },
       (auditFd) => invokeBrokerProcess({ request, credentialRef, credentialFd: credential.fd, auditFd },
         { timeoutMs: 180_000, outputBytes: PRODUCTION_RESPONSE_BYTES_CEILING })) });
-  const results = [];
+  const results = []; const userConfirmedRecoveries = [];
   while (true) {
     const result = await executor.executeNext(); if (result.status === "idle") break;
-    if (result.status !== "completed") throw Object.assign(new Error(`${category} did not complete`), { category: result.error?.category ?? result.status,
-      ...(typeof result.error?.providerCode === "string" && /^[A-Z0-9_]{1,64}$/u.test(result.error.providerCode) ? { code: result.error.providerCode } : {}) });
+    if (result.status !== "completed") {
+      if (result.error?.category === "malformed-response" && userConfirmedRecoveries.length === 0) {
+        const unresolvedCount = segmentIds.length - results.length;
+        const recoveryUsage = estimate(unresolvedCount, 500_000, unresolvedCount * TRANSLATION_OUTPUT_TOKENS,
+          10_000_000, 0, unresolvedCount * 180_000);
+        const flowBudgets = new TranslationFlowBudgetService(fixture.database, fixture.workspaceId); const currentBudget = flowBudgets.get(workflowId);
+        flowBudgets.expand(workflowId, currentBudget.version,
+          expandedKnowledgeLoopRecoveryPolicy(currentBudget.policy, category, recoveryUsage), USER);
+        const control = fixture.database.prepare(`SELECT version, flow_state AS flowState, outcome_state AS outcomeState, pause_reason AS pauseReason
+          FROM translation_flow_controls WHERE workspace_id = ? AND workflow_id = ?`).get(fixture.workspaceId, workflowId);
+        if (control.flowState !== "paused" || control.outcomeState !== "unknown" || control.pauseReason !== "translation-unknown-outcome") {
+          throw Object.assign(new Error("malformed translation did not pause for explicit recovery"), { category: "policy", code: "USER_RECOVERY_STATE" });
+        }
+        const recoveryKey = `${idempotencyKey}:user-confirmed-malformed-recovery:1`;
+        const recovery = new FlowRecoveryService(fixture.database, fixture.workspaceId).resolve(workflowId, control.version, "retry", {
+          providerId: "deepseek", modelId: MODEL_ID, policyVersion: `${article.id}:${recoveryKey}:provider-budget`,
+          idempotencyKey: recoveryKey, maxAttempts: 1, batchSize: 1, budgetCategory: category, estimatedUsage: recoveryUsage,
+        }, USER);
+        policyVersion = addProviderBudget(pricing, article.id, recoveryKey, 50_000_000); pricing.assignTask(recovery.taskId, policyVersion);
+        userConfirmedRecoveries.push(Object.freeze({ category, failedAttemptId: result.attemptId, recoveryTaskId: recovery.taskId,
+          unresolvedSegmentCount: unresolvedCount, flowState: recovery.flowState }));
+        progress(article.id, `${category}-user-confirmed-recovery`, 1, 1); continue;
+      }
+      throw Object.assign(new Error(`${category} did not complete`), { category: result.error?.category ?? result.status,
+        ...(typeof result.error?.providerCode === "string" && /^[A-Z0-9_]{1,64}$/u.test(result.error.providerCode) ? { code: result.error.providerCode } : {}) });
+    }
     results.push(result); progress(article.id, category, results.length, segmentIds.length);
   }
-  if (results.length !== segmentIds.length) throw new Error(`${category} call count mismatch`); return results;
+  if (results.length !== segmentIds.length) throw new Error(`${category} call count mismatch`);
+  return Object.freeze({ results: Object.freeze(results), userConfirmedRecoveries: Object.freeze(userConfirmedRecoveries) });
 }
 
 if (process.env.M5C_REAL_KNOWLEDGE_LOOP !== "execute") throw new Error("real knowledge loop requires M5C_REAL_KNOWLEDGE_LOOP=execute");
+if (process.env.M5C_REAL_USER_RECOVERY !== USER_RECOVERY_MODE) throw new Error("real knowledge loop requires explicit malformed recovery authorization");
 
 let credential; let braveCredential; let audit; let stage = "preflight"; let currentDocumentId = null; const documents = [];
 try {
@@ -181,7 +208,7 @@ try {
       const pricing = new PricingBudgetService(fixture.database, fixture.workspaceId); pricing.addPricing({ providerId: "deepseek", modelId: MODEL_ID,
         pricingVersion: PRICING_VERSION, currency: "CNY", inputMicrosPerMillion: 2_800_000, outputMicrosPerMillion: 5_600_000,
         cachedInputMicrosPerMillion: 56_000, source: "official-2026-08-03-usd-pricing-at-10-cny-per-usd-and-2x-peak-ceiling" });
-      stage = "translation"; const translation = await executeTranslations({ fixture, workflowId, contexts, pricing, credential, audit, article,
+      stage = "translation"; const translationExecution = await executeTranslations({ fixture, workflowId, contexts, pricing, credential, audit, article,
         segmentIds, category: "translation", idempotencyKey: `${article.id}:translation` });
       const copies = new WorkCopyService(fixture.database, fixture.workspaceId);
       for (const segmentId of segmentIds) {
@@ -197,7 +224,7 @@ try {
       context = contexts.assemble(workflowId, { researchClaimIds: [plannerResearch.claimId, translationResearch.claimId] }, SYSTEM);
       context = contexts.decide(workflowId, context.head.version, "approved", USER);
       const affected = [...new Set(selectedTranslationNeed.relatedSegmentIds)].slice(0, MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE);
-      stage = "retranslation"; const retranslation = await executeTranslations({ fixture, workflowId, contexts, pricing, credential, audit, article,
+      stage = "retranslation"; const retranslationExecution = await executeTranslations({ fixture, workflowId, contexts, pricing, credential, audit, article,
         segmentIds: affected, category: "retranslation", idempotencyKey: `${article.id}:retranslation` });
       for (const segmentId of affected) {
         const candidate = copies.listCandidates(workflowId, segmentId).filter((item) => item.sourceType === "machine").at(-1);
@@ -224,11 +251,13 @@ try {
         source: { digest: source.digest, bytes: source.bytes, segmentCount: segmentIds.length }, workflowId, planner: { status: planned.status,
           itemCount: planned.plan.plan.items.length }, knowledgeNeeds: knowledgeNeedSummary, research: [plannerResearch, translationResearch],
         context: { revision: context.context.revision, itemCount: context.context.items.length, digest: context.context.contextDigest },
-        translation: { initialCalls: translation.length, retranslationCalls: retranslation.length, affectedSegmentIds: affected },
+        translation: { initialCalls: translationExecution.results.length, retranslationCalls: retranslationExecution.results.length,
+          userConfirmedMalformedRecoveries: [...translationExecution.userConfirmedRecoveries, ...retranslationExecution.userConfirmedRecoveries],
+          affectedSegmentIds: affected },
         target: { workingCopyDigest: bundle.digest, segmentCount: bundle.segments.length }, validation,
         qa: { mode: "enabled", thinking: "enabled", qaRunId: qaResult.run.qaRunId, targetRevisionId: qaResult.run.targetRevisionId,
           findings: qaResult.run.findings, usage: qaResult.settlement.usage }, finalization, flowBudgetUsage: budget.totals,
-        automaticRetries: 0, approvalPerformed: false, exportPerformed: false });
+        automaticRetries: 0, userRecoveryMode: USER_RECOVERY_MODE, approvalPerformed: false, exportPerformed: false });
       await save(outputRoot, `${article.id}-knowledge-loop.json`, result); documents.push(result); progress(article.id, "completed");
     } finally { await fixture.close(); }
   }
@@ -237,7 +266,8 @@ try {
       knowledgeNeeds: item.knowledgeNeeds, research: item.research.map(({ outcome, supportLevel, usage }) => ({ outcome, supportLevel, usage })),
       translation: item.translation, validationFindings: item.validation.findings.length, qaFindings: item.qa.findings.length, qaUsage: item.qa.usage })),
     limits: knowledgeLoopLimits(), audit: { calls: auditSummary.calls, manifestDigest: auditSummary.manifestDigest },
-    auditSummaryDigest: digest(auditSummary.entries), rawLlmInputsOutputsRetained: true, qaModesExecuted: ["enabled"], automaticRetries: 0 };
+    auditSummaryDigest: digest(auditSummary.entries), rawLlmInputsOutputsRetained: true, qaModesExecuted: ["enabled"],
+    userRecoveryMode: USER_RECOVERY_MODE, automaticRetries: 0 };
   await save(outputRoot, "knowledge-loop-summary.json", summary); process.stdout.write(`${JSON.stringify(summary)}\n`);
 } catch (error) {
   const allowed = new Set(["auth", "budget", "canceled", "malformed-response", "policy", "provider", "rate-limit", "timeout", "unknown-outcome"]);

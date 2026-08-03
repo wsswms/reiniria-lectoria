@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { flowBudgetPolicyContract } from "../../src/m5c/contracts.mjs";
-import { knowledgeLoopArticleBudget, knowledgeLoopLimits, RESEARCH_STEP_CODES, researchStepFailure,
+import { expandedKnowledgeLoopRecoveryPolicy, knowledgeLoopArticleBudget, knowledgeLoopLimits, RESEARCH_STEP_CODES, researchStepFailure,
   selectOfficialSearchResult, summarizeKnowledgeNeeds } from "../../scripts/m5c-real-knowledge-loop.mjs";
 
 test("real knowledge loop fixes one enabled QA and bounded research and retranslation", () => {
   assert.deepEqual(knowledgeLoopLimits(), { plannerCalls: 2, initialTranslationCalls: 116, maximumRetranslationCalls: 32,
-    enabledQaCalls: 2, maximumDeepSeekCalls: 152, maximumBraveCalls: 4, maximumBraveCostMicrosUsd: 20_000, automaticRetries: 0 });
+    enabledQaCalls: 2, maximumUserConfirmedMalformedRecoveries: 4, maximumDeepSeekCalls: 156,
+    maximumBraveCalls: 4, maximumBraveCostMicrosUsd: 20_000, automaticRetries: 0 });
 });
 
 test("real knowledge loop article budgets satisfy the production FlowBudget contract", () => {
@@ -37,4 +38,20 @@ test("real research failures expose only fixed safe step codes", () => {
   assert.deepEqual({ message: failure.message, category: failure.category, code: failure.code, keys: Object.keys(failure).sort() },
     { message: "real research step failed", category: "policy", code: "RESEARCH_CREATE_REQUEST", keys: ["category", "code"] });
   assert.throws(() => researchStepFailure("private-step", {}), /invalid/);
+});
+
+test("explicit malformed recovery expands only the selected category and article stop line", () => {
+  const policy = knowledgeLoopArticleBudget(54); const usage = {
+    calls: 12, inputTokens: 50_000, outputTokens: 12_000, costMicrosCny: 100_000, costMicrosUsd: 0, durationMs: 120_000,
+  };
+  const expanded = expandedKnowledgeLoopRecoveryPolicy(policy, "translation", usage);
+  assert.equal(expanded.maxCalls, policy.maxCalls + usage.calls);
+  assert.equal(expanded.maxInputTokens, policy.maxInputTokens + usage.inputTokens);
+  assert.equal(expanded.maxOutputTokens, policy.maxOutputTokens + usage.outputTokens);
+  assert.equal(expanded.maxUnknownOutcomes, policy.maxUnknownOutcomes + 1);
+  assert.equal(expanded.categories.translation.maxCalls, policy.categories.translation.maxCalls + usage.calls);
+  assert.equal(expanded.categories.translation.maxOutputTokens, policy.categories.translation.maxOutputTokens + usage.outputTokens);
+  assert.deepEqual(expanded.categories.retranslation, policy.categories.retranslation);
+  assert.equal(policy.maxCalls, 76, "the approved prior policy remains immutable");
+  assert.throws(() => expandedKnowledgeLoopRecoveryPolicy(policy, "qa", usage), /invalid/);
 });

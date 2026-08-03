@@ -11,6 +11,8 @@ export const KNOWLEDGE_LOOP_ARTICLES = Object.freeze({
 export const BRAVE_COST_MICROS_USD_PER_CALL = 5_000;
 export const MAX_RESEARCH_CALLS_PER_ARTICLE = 2;
 export const MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE = 16;
+export const USER_RECOVERY_MODE = "authorized-malformed-once-per-stage";
+export const MAX_USER_CONFIRMED_MALFORMED_RECOVERIES_PER_ARTICLE = 2;
 export const TRANSLATION_OUTPUT_TOKENS = 16_384;
 export const ROLE_OUTPUT_TOKENS = 65_536;
 export const RESEARCH_STEP_CODES = Object.freeze({
@@ -33,6 +35,42 @@ export function researchStepFailure(step, cause) {
   return Object.assign(new Error("real research step failed"), {
     ...(typeof cause?.category === "string" ? { category: cause.category } : {}), code,
   });
+}
+
+const RECOVERY_LIMIT_KEYS = Object.freeze([
+  ["calls", "maxCalls"],
+  ["inputTokens", "maxInputTokens"],
+  ["outputTokens", "maxOutputTokens"],
+  ["costMicrosCny", "maxCostMicrosCny"],
+  ["costMicrosUsd", "maxCostMicrosUsd"],
+  ["durationMs", "maxDurationMs"],
+]);
+
+export function expandedKnowledgeLoopRecoveryPolicy(policy, category, usage) {
+  if (!policy || typeof policy !== "object" || !new Set(["translation", "retranslation"]).has(category)
+    || !usage || RECOVERY_LIMIT_KEYS.some(([usageKey]) => !Number.isSafeInteger(usage[usageKey]) || usage[usageKey] < 0)) {
+    throw new TypeError("knowledge loop recovery expansion is invalid");
+  }
+  const categories = Object.fromEntries(Object.entries(policy.categories).map(([name, limits]) => [name, { ...limits }]));
+  const limits = {
+    maxCalls: policy.maxCalls,
+    maxInputTokens: policy.maxInputTokens,
+    maxOutputTokens: policy.maxOutputTokens,
+    maxCostMicrosCny: policy.maxCostMicrosCny,
+    maxCostMicrosUsd: policy.maxCostMicrosUsd,
+    maxDurationMs: policy.maxDurationMs,
+    maxResearchCycles: policy.maxResearchCycles,
+    maxQaCycles: policy.maxQaCycles,
+    maxRetranslations: policy.maxRetranslations,
+    maxUnknownOutcomes: policy.maxUnknownOutcomes + 1,
+    categories,
+  };
+  for (const [usageKey, limitKey] of RECOVERY_LIMIT_KEYS) {
+    limits[limitKey] += usage[usageKey];
+    categories[category][limitKey] += usage[usageKey];
+  }
+  return Object.freeze({ ...limits, categories: Object.freeze(Object.fromEntries(Object.entries(categories)
+    .map(([name, value]) => [name, Object.freeze(value)]))) });
 }
 
 export function knowledgeLoopArticleBudget(segmentCount) {
@@ -60,8 +98,9 @@ export function knowledgeLoopArticleBudget(segmentCount) {
 
 export function knowledgeLoopLimits() {
   const translationCalls = Object.values(KNOWLEDGE_LOOP_ARTICLES).reduce((sum, article) => sum + article.segmentCount, 0);
+  const maximumUserConfirmedMalformedRecoveries = Object.keys(KNOWLEDGE_LOOP_ARTICLES).length * MAX_USER_CONFIRMED_MALFORMED_RECOVERIES_PER_ARTICLE;
   return Object.freeze({ plannerCalls: 2, initialTranslationCalls: translationCalls, maximumRetranslationCalls: 32, enabledQaCalls: 2,
-    maximumDeepSeekCalls: translationCalls + 36, maximumBraveCalls: 4,
+    maximumUserConfirmedMalformedRecoveries, maximumDeepSeekCalls: translationCalls + 36 + maximumUserConfirmedMalformedRecoveries, maximumBraveCalls: 4,
     maximumBraveCostMicrosUsd: 4 * BRAVE_COST_MICROS_USD_PER_CALL, automaticRetries: 0 });
 }
 

@@ -3,10 +3,11 @@ import { LocalContextPlanner } from "../src/m5c/local-context-planner.mjs";
 import { flowBudgetPolicyContract } from "../src/m5c/contracts.mjs";
 import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, readPrivateArticle } from "./m5c-real-article-batch.mjs";
-import { KNOWLEDGE_LOOP_ARTICLES, knowledgeLoopArticleBudget, knowledgeLoopLimits } from "./m5c-real-knowledge-loop.mjs";
+import { KNOWLEDGE_LOOP_ARTICLES, USER_RECOVERY_MODE, knowledgeLoopArticleBudget, knowledgeLoopLimits } from "./m5c-real-knowledge-loop.mjs";
 import { randomUUID } from "node:crypto";
 
 if (process.env.M5C_REAL_KNOWLEDGE_LOOP !== "preflight") throw new Error("real knowledge loop preflight requires M5C_REAL_KNOWLEDGE_LOOP=preflight");
+if (process.env.M5C_REAL_USER_RECOVERY !== USER_RECOVERY_MODE) throw new Error("real knowledge loop preflight requires explicit malformed recovery authorization");
 let deepseek; let brave;
 try {
   deepseek = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE); brave = await openCredentialFile(process.env.BRAVE_KEY_FILE);
@@ -30,5 +31,5 @@ try {
   }
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-knowledge-loop-preflight-v1", status: "ready", documents,
     limits: knowledgeLoopLimits(), providers: { translationPlannerQa: "deepseek-v4-flash", search: "brave-search" },
-    finalQaModes: ["enabled"], fullLlmAudit: true, automaticRetries: 0 })}\n`);
+    finalQaModes: ["enabled"], fullLlmAudit: true, userRecoveryMode: USER_RECOVERY_MODE, automaticRetries: 0 })}\n`);
 } finally { await brave?.close(); await deepseek?.close(); }
