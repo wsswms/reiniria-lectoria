@@ -9,7 +9,7 @@ import { FlowPlanService } from "../src/m5c/flow-plan-service.mjs";
 import { M5CPlannerExecutor } from "../src/m5c/planner-executor.mjs";
 import { TemporaryContextService } from "../src/m5c/temporary-context-service.mjs";
 import { TranslationFlowBudgetService } from "../src/m5c/flow-budget-service.mjs";
-import { DEFAULT_FLOW_BUDGET, contentDigest } from "../src/m5c/contracts.mjs";
+import { contentDigest } from "../src/m5c/contracts.mjs";
 import { CandidateKnowledgeNeedService } from "../src/m5c/candidate-knowledge-need-service.mjs";
 import { M5CQAService } from "../src/m5c/qa-service.mjs";
 import { M5CModelQAExecutor } from "../src/m5c/model-qa-executor.mjs";
@@ -25,8 +25,9 @@ import { createRealBraveGatewayAdapter } from "../src/research/real-brave-evalua
 import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, readPrivateArticle } from "./m5c-real-article-batch.mjs";
 import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
-import { KNOWLEDGE_LOOP_ARTICLES, BRAVE_COST_MICROS_USD_PER_CALL, MAX_RESEARCH_CALLS_PER_ARTICLE,
-  MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, digest, knowledgeLoopLimits, selectOfficialSearchResult,
+import { KNOWLEDGE_LOOP_ARTICLES, BRAVE_COST_MICROS_USD_PER_CALL,
+  MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, ROLE_OUTPUT_TOKENS, TRANSLATION_OUTPUT_TOKENS, digest,
+  knowledgeLoopArticleBudget, knowledgeLoopLimits, selectOfficialSearchResult,
   summarizeKnowledgeNeeds } from "./m5c-real-knowledge-loop.mjs";
 import { PRODUCTION_RESPONSE_BYTES_CEILING } from "../src/m5c/role-policy.mjs";
 
@@ -34,8 +35,6 @@ const USER = Object.freeze({ type: "user", id: "m5c-real-knowledge-loop-owner" }
 const SYSTEM = Object.freeze({ type: "system", id: "m5c-real-knowledge-loop-control-plane" });
 const MODEL_ID = "deepseek-v4-flash";
 const PRICING_VERSION = "deepseek-v4-flash-2026-08-03-conservative-cny-v1";
-const TRANSLATION_OUTPUT_TOKENS = 16_384;
-const ROLE_OUTPUT_TOKENS = 65_536;
 const FIXED = Object.freeze({
   "nikon-omoshiro-part1": Object.freeze({ digest: "sha256:3a94942c23690d11c7a61527e3778c61fc557cb6a1af2596d40d57ae33d6fc5d", segmentCount: 54 }),
   "nikon-omoshiro-part2": Object.freeze({ digest: "sha256:fb274eb8b2d77f63a15bb28128353de042a196589a535992721a6789336c7945", segmentCount: 62 }),
@@ -44,28 +43,6 @@ const estimate = (calls, inputTokens, outputTokens, costMicrosCny, costMicrosUsd
   ({ calls, inputTokens, outputTokens, costMicrosCny, costMicrosUsd, durationMs });
 const progress = (documentId, phase, completed, total) => process.stderr.write(`${JSON.stringify({ type: "progress", documentId, phase,
   ...(completed === undefined ? {} : { completed, total }) })}\n`);
-
-function articleBudget(segmentCount) {
-  const zero = Object.freeze({ maxCalls: 0, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 0 });
-  return Object.freeze({ ...DEFAULT_FLOW_BUDGET, maxCalls: segmentCount + 22, maxInputTokens: 2_500_000,
-    maxOutputTokens: ROLE_OUTPUT_TOKENS * 2 + (segmentCount + MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE) * TRANSLATION_OUTPUT_TOKENS,
-    maxCostMicrosCny: 50_000_000, maxCostMicrosUsd: 2_000_000, maxDurationMs: 20_000_000,
-    maxResearchCycles: 2, maxQaCycles: 1, maxRetranslations: 1, maxUnknownOutcomes: 1,
-    categories: Object.freeze({
-      planner: Object.freeze({ maxCalls: 1, maxInputTokens: 150_000, maxOutputTokens: ROLE_OUTPUT_TOKENS,
-        maxCostMicrosCny: 5_000_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
-      search: Object.freeze({ maxCalls: MAX_RESEARCH_CALLS_PER_ARTICLE, maxInputTokens: 0, maxOutputTokens: 0,
-        maxCostMicrosCny: 0, maxCostMicrosUsd: 1_000_000, maxDurationMs: 120_000 }),
-      fetch: zero, research: zero,
-      translation: Object.freeze({ maxCalls: segmentCount, maxInputTokens: 1_500_000, maxOutputTokens: segmentCount * TRANSLATION_OUTPUT_TOKENS,
-        maxCostMicrosCny: 15_000_000, maxCostMicrosUsd: 0, maxDurationMs: segmentCount * 180_000 }),
-      qa: Object.freeze({ maxCalls: 1, maxInputTokens: 400_000, maxOutputTokens: ROLE_OUTPUT_TOKENS,
-        maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: 900_000 }),
-      retranslation: Object.freeze({ maxCalls: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, maxInputTokens: 500_000,
-        maxOutputTokens: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE * TRANSLATION_OUTPUT_TOKENS,
-        maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE * 180_000 }),
-    }) });
-}
 
 async function privateOutputDirectory(path) {
   if (typeof path !== "string" || path.length === 0) throw new Error("M5C_REAL_KNOWLEDGE_OUTPUT_DIR is required");
@@ -177,7 +154,7 @@ try {
       if (segmentIds.length !== fixed.segmentCount) throw new Error("real article segmentation changed");
       const workflowId = randomUUID(); const plans = new FlowPlanService(fixture.database, fixture.workspaceId);
       plans.create({ workflowId, documentId: imported.documentId, sourceRevisionId: imported.sourceRevisionId,
-        targetLanguage: article.targetLanguage, budget: articleBudget(segmentIds.length) }, USER);
+        targetLanguage: article.targetLanguage, budget: knowledgeLoopArticleBudget(segmentIds.length) }, USER);
       stage = "planner"; const planner = new M5CPlannerExecutor(fixture.database, fixture.workspaceId, { plans,
         invokePlanner: (request) => audit.invoke(`planner-${article.id}`, { articleId: article.id, role: "planner", thinking: "disabled" },
           (auditFd) => invokeM5CModelBroker({ credentialFd: credential.fd, auditFd,

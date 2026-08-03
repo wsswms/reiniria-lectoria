@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DEFAULT_FLOW_BUDGET } from "../src/m5c/contracts.mjs";
 
 export const KNOWLEDGE_LOOP_ARTICLES = Object.freeze({
   "nikon-omoshiro-part1": Object.freeze({ query: "site:nij.nikon.com ニコン おもしろレンズ工房 ぐぐっと ふわっと",
@@ -10,6 +11,31 @@ export const KNOWLEDGE_LOOP_ARTICLES = Object.freeze({
 export const BRAVE_COST_MICROS_USD_PER_CALL = 5_000;
 export const MAX_RESEARCH_CALLS_PER_ARTICLE = 2;
 export const MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE = 16;
+export const TRANSLATION_OUTPUT_TOKENS = 16_384;
+export const ROLE_OUTPUT_TOKENS = 65_536;
+
+export function knowledgeLoopArticleBudget(segmentCount) {
+  if (!Number.isSafeInteger(segmentCount) || segmentCount < 1 || segmentCount > 128) throw new TypeError("segment count is invalid");
+  const zero = Object.freeze({ maxCalls: 0, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 0 });
+  return Object.freeze({ ...DEFAULT_FLOW_BUDGET, maxCalls: segmentCount + 22, maxInputTokens: 3_000_000,
+    maxOutputTokens: ROLE_OUTPUT_TOKENS * 2 + (segmentCount + MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE) * TRANSLATION_OUTPUT_TOKENS,
+    maxCostMicrosCny: 50_000_000, maxCostMicrosUsd: 2_000_000, maxDurationMs: 20_000_000,
+    maxResearchCycles: 2, maxQaCycles: 1, maxRetranslations: 1, maxUnknownOutcomes: 1,
+    categories: Object.freeze({
+      planner: Object.freeze({ maxCalls: 1, maxInputTokens: 150_000, maxOutputTokens: ROLE_OUTPUT_TOKENS,
+        maxCostMicrosCny: 5_000_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
+      search: Object.freeze({ maxCalls: MAX_RESEARCH_CALLS_PER_ARTICLE, maxInputTokens: 0, maxOutputTokens: 0,
+        maxCostMicrosCny: 0, maxCostMicrosUsd: 1_000_000, maxDurationMs: 120_000 }),
+      fetch: zero, research: zero,
+      translation: Object.freeze({ maxCalls: segmentCount, maxInputTokens: 1_500_000, maxOutputTokens: segmentCount * TRANSLATION_OUTPUT_TOKENS,
+        maxCostMicrosCny: 15_000_000, maxCostMicrosUsd: 0, maxDurationMs: segmentCount * 180_000 }),
+      qa: Object.freeze({ maxCalls: 1, maxInputTokens: 400_000, maxOutputTokens: ROLE_OUTPUT_TOKENS,
+        maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: 900_000 }),
+      retranslation: Object.freeze({ maxCalls: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE, maxInputTokens: 500_000,
+        maxOutputTokens: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE * TRANSLATION_OUTPUT_TOKENS,
+        maxCostMicrosCny: 10_000_000, maxCostMicrosUsd: 0, maxDurationMs: MAX_RETRANSLATION_SEGMENTS_PER_ARTICLE * 180_000 }),
+    }) });
+}
 
 export function knowledgeLoopLimits() {
   const translationCalls = Object.values(KNOWLEDGE_LOOP_ARTICLES).reduce((sum, article) => sum + article.segmentCount, 0);

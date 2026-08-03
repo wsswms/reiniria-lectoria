@@ -1,8 +1,9 @@
 import { openCredentialFile } from "../src/provider/credential-file.mjs";
 import { LocalContextPlanner } from "../src/m5c/local-context-planner.mjs";
+import { flowBudgetPolicyContract } from "../src/m5c/contracts.mjs";
 import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, readPrivateArticle } from "./m5c-real-article-batch.mjs";
-import { KNOWLEDGE_LOOP_ARTICLES, knowledgeLoopLimits } from "./m5c-real-knowledge-loop.mjs";
+import { KNOWLEDGE_LOOP_ARTICLES, knowledgeLoopArticleBudget, knowledgeLoopLimits } from "./m5c-real-knowledge-loop.mjs";
 import { randomUUID } from "node:crypto";
 
 if (process.env.M5C_REAL_KNOWLEDGE_LOOP !== "preflight") throw new Error("real knowledge loop preflight requires M5C_REAL_KNOWLEDGE_LOOP=preflight");
@@ -19,6 +20,8 @@ try {
       const plan = new LocalContextPlanner(fixture.database, fixture.workspaceId).build({ workflowId: randomUUID(),
         sourceRevisionId: imported.sourceRevisionId, targetLanguage: article.targetLanguage }); const expected = KNOWLEDGE_LOOP_ARTICLES[article.id];
       if (!expected || segmentCount !== expected.segmentCount) throw new Error("real knowledge loop segmentation is not fixed");
+      flowBudgetPolicyContract({ schemaVersion: "1.0", workflowId: randomUUID(), revision: 1, ...knowledgeLoopArticleBudget(segmentCount),
+        authorizedBy: { type: "user", id: "preflight" }, createdAt: new Date().toISOString() });
       documents.push({ articleId: article.id, sourceDigest: source.digest, bytes: source.bytes, segmentCount,
         localPlanItems: plan.items.length, localHighRiskUncovered: plan.items.filter((item) => ["critical", "high"].includes(item.impact)
           && ["partially-covered", "conflicted", "stale", "uncovered"].includes(item.coverage)).length,
