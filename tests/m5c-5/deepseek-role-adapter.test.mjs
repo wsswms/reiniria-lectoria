@@ -54,8 +54,15 @@ test("role adapter and Broker fail closed on credentials identity malformed outp
   assert.throws(() => invokeM5CModelBroker({ request: qa, credentialFd: 3, credentialRef: "forged" }), /credential scope/);
   await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => new Response("private upstream body", { status: 401 }) }).invoke(qa, { credential: "fixture-secret" }),
     (error) => error.category === "auth" && !String(error).includes("fixture-secret") && !String(error).includes("private upstream"));
-  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => { throw new Error("private socket detail"); } }).invoke(qa, { credential: "fixture-secret" }),
-    (error) => error.category === "unknown-outcome" && error.retryable === false);
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    throw Object.assign(new Error("private socket detail"), { cause: { code: "UND_ERR_SOCKET", hostname: "private.example" } });
+  } }).invoke(qa, { credential: "fixture-secret" }),
+    (error) => error.category === "unknown-outcome" && error.retryable === false && error.providerCode === "UND_ERR_SOCKET"
+      && !String(error).includes("private.example"));
+  await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => {
+    throw Object.assign(new Error("private socket detail"), { cause: { code: "unsafe code private.example" } });
+  } }).invoke(qa, { credential: "fixture-secret" }),
+    (error) => error.category === "unknown-outcome" && error.providerCode === undefined);
   await assert.rejects(new M5CDeepSeekRoleAdapter({ fetchImpl: async () => new Response("not-json", { status: 200 }) }).invoke(qa, { credential: "fixture-secret" }),
     (error) => error.category === "malformed-response");
 });

@@ -31,6 +31,10 @@ export class M5CDeepSeekRoleError extends Error {
 }
 
 const fail = (category, retryable = false, code) => new M5CDeepSeekRoleError(category, retryable, code);
+function networkCode(error) {
+  const code = error?.cause?.code ?? error?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,64}$/u.test(code) ? code : undefined;
+}
 function object(value) { return value && typeof value === "object" && !Array.isArray(value); }
 function exact(value, keys, code = "object-keys") {
   if (!object(value) || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) throw fail("malformed-response", false, code);
@@ -158,7 +162,8 @@ export class M5CDeepSeekRoleAdapter {
       if (typeof credential !== "string" || credential.length < 1 || /\s/u.test(credential)) throw fail("auth");
       try { response = await this.fetchImpl(outbound.url, { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
         body: JSON.stringify(outbound.body), redirect: "error", signal }); }
-      catch (error) { throw fail(signal?.aborted || error?.name === "AbortError" ? "canceled" : "unknown-outcome"); }
+      catch (error) { throw signal?.aborted || error?.name === "AbortError"
+        ? fail("canceled") : fail("unknown-outcome", false, networkCode(error)); }
       if (!response || typeof response.status !== "number") throw fail("malformed-response");
       const maximum = evaluationResponseBytes(request.evaluationScope, MAX_RESPONSE_BYTES);
       const declared = Number(response.headers?.get?.("content-length")); if (Number.isFinite(declared) && declared > maximum) throw fail("malformed-response");
