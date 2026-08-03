@@ -13,7 +13,9 @@ const SYSTEM_INSTRUCTION = [
   "Preserve every protected marker exactly.",
   "Return valid JSON with exactly one candidate for each segment, in the supplied order.",
   "The JSON object must contain only candidates; every candidate must contain exactly segmentId, text, and knowledgeNeeds.",
-  "knowledgeNeeds must be an array of at most 8 genuine translation uncertainties. Each item contains exactly kind, impact, question, relatedSegmentIds. Never authorize research or network access; use an empty array when no investigation is needed.",
+  "knowledgeNeeds must be an array of at most 8 genuine translation uncertainties. Each item contains exactly kind, impact, question, relatedSegmentIds.",
+  "kind must be exactly term, entity, fact, relation, or measurement; use term for terminology questions and omit style-only uncertainties. impact must be exactly critical, high, medium, or low.",
+  "Never authorize research or network access; use an empty array when no investigation is needed.",
   'Example JSON: {"candidates":[{"segmentId":"00000000-0000-4000-8000-000000000000","text":"translated text","knowledgeNeeds":[]}]}.',
 ].join(" ");
 const evidenceInstruction = (request) => `${SYSTEM_INSTRUCTION}${request.evidence

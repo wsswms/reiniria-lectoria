@@ -55,6 +55,8 @@ test("DeepSeek request uses fixed endpoint, bearer auth and JSON Object mode wit
   assert.equal(body.stream, false);
   assert.match(body.messages[0].content, /valid JSON/);
   assert.match(body.messages[0].content, /\{\"candidates\"/);
+  assert.match(body.messages[0].content, /kind must be exactly term, entity, fact, relation, or measurement/);
+  assert.match(body.messages[0].content, /use term for terminology questions and omit style-only uncertainties/);
   for (const id of [input.workspaceId, input.taskId, input.attemptId, input.workflowId, input.sourceRevisionId]) {
     assert.equal(observation.init.body.includes(id), false);
   }
