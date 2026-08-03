@@ -51,13 +51,17 @@ function detectorDocument(input) {
 }
 
 function approvedTerm(input) {
-  exact(input, ["factId", "revisionId", "contentDigest", "retrieverVersion", "state", "kind", "language", "targetLanguages", "term", "variants"], "approved term");
+  exact(input, ["factId", "revisionId", "contentDigest", "retrieverVersion", "state", "kind", "language", "targetLanguages", "term", "preferredTranslations", "variants"], "approved term");
   if (input.state !== "active" || input.kind !== "term") throw new TypeError("approved term must be an active term fact");
+  if (!Array.isArray(input.preferredTranslations) || input.preferredTranslations.length > 64) throw new TypeError("preferredTranslations is invalid");
   return Object.freeze({ factId: text(input.factId, "factId", 255), revisionId: text(input.revisionId, "revisionId", 255),
     contentDigest: digest(input.contentDigest, "contentDigest"), retrieverVersion: text(input.retrieverVersion, "retrieverVersion", 255),
     state: input.state, kind: input.kind, language: language(input.language, "term language"),
     targetLanguages: Object.freeze(uniqueStrings(input.targetLanguages, "targetLanguages", 64).map((item) => language(item, "target language")).sort()),
-    term: text(input.term, "term", 1_024), variants: uniqueStrings(input.variants, "variants", 64) });
+    term: text(input.term, "term", 1_024), preferredTranslations: Object.freeze(input.preferredTranslations.map((item, index) => {
+      exact(item, ["language", "text"], `preferred translation ${index}`);
+      return Object.freeze({ language: language(item.language, "preferred translation language"), text: text(item.text, "preferred translation", 2_048) });
+    })), variants: uniqueStrings(input.variants, "variants", 64) });
 }
 
 export function detectorV3ApprovedTermFromFact(view, retrieverVersion) {
@@ -67,7 +71,8 @@ export function detectorV3ApprovedTermFromFact(view, retrieverVersion) {
   }
   return approvedTerm({ factId: view.source.factId, revisionId: view.source.revisionId, contentDigest: view.revision.contentDigest,
     retrieverVersion, state: view.head.state, kind: view.source.kind, language: view.source.language,
-    targetLanguages: view.source.scope.targetLanguages, term: view.source.content.term, variants: view.source.content.variants });
+    targetLanguages: view.source.scope.targetLanguages, term: view.source.content.term,
+    preferredTranslations: view.source.content.preferredTranslations, variants: view.source.content.variants });
 }
 
 function matchApprovedKnowledge(document, approvedTerms) {
@@ -97,7 +102,8 @@ function matchApprovedKnowledge(document, approvedTerms) {
       start: item.start, end: item.end, factId: item.term.factId, revisionId: item.term.revisionId, contentDigest: item.term.contentDigest }),
     segmentId: item.segmentId, start: item.start, end: item.end, surface: item.surface, matchType: item.matchType,
     factId: item.term.factId, revisionId: item.term.revisionId, contentDigest: item.term.contentDigest,
-    retrieverVersion: item.term.retrieverVersion, exact: true,
+    retrieverVersion: item.term.retrieverVersion,
+    preferredTranslation: item.term.preferredTranslations.find((value) => value.language === document.targetLanguage)?.text ?? null, exact: true,
   })));
 }
 
@@ -167,14 +173,15 @@ export const DETECTOR_V3_SYSTEM_PROMPT = [
   'Shape: {"items":[{"kind":"term","impact":"high","issue":"preferred-translation","sourceSpans":[{"segmentId":"exact id","text":"exact quote"}],"question":"简明中文问题","suggestedKnowledgeHitIds":[],"researchBatchHint":"optical-terms"}]}',
 ].join(" ");
 
-export function buildDetectorV3DeepSeekBody({ coverage, modelId, maxOutputTokens }) {
+export function buildDetectorV3DeepSeekBody({ coverage, modelId, maxOutputTokens, temperature = 0 }) {
   if (!MODEL_ID.test(modelId ?? "") || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 65_536) {
     throw new TypeError("Detector v3 DeepSeek configuration is invalid");
   }
+  if (![0, 1].includes(temperature)) throw new TypeError("Detector v3 DeepSeek temperature is invalid");
   return Object.freeze({ model: modelId, messages: Object.freeze([
     Object.freeze({ role: "system", content: DETECTOR_V3_SYSTEM_PROMPT }),
     Object.freeze({ role: "user", content: JSON.stringify(buildDetectorV3ModelInput(coverage)) }),
-  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }), temperature: 0,
+  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }), temperature,
   max_tokens: maxOutputTokens, stream: false });
 }
 

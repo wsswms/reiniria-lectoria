@@ -8,6 +8,12 @@ import {
   normalizeDetectorV3Payload,
   detectorV3ApprovedTermFromFact,
 } from "../../src/m5e/detector-v3.mjs";
+import {
+  buildDetectorV3LiteDeepSeekBody,
+  buildDetectorV3LiteModelInput,
+  normalizeDetectorV3LitePayload,
+} from "../../src/m5e/detector-v3-lite.mjs";
+import { buildPlannerExperimentMatrix, plannerExperimentPromptMetrics } from "../../src/m5e/planner-prompt-experiment.mjs";
 import { invokeM5EDetectorV3DeepSeek } from "../../scripts/m5e-detector-v3-deepseek.mjs";
 import { KnowledgeFactService } from "../../src/knowledge/fact-service.mjs";
 import { FtsRetriever } from "../../src/knowledge/fts-retriever.mjs";
@@ -35,10 +41,11 @@ const document = Object.freeze({ schemaVersion: "m5e-detector-document-v1", docu
 const approvedTerms = Object.freeze([
   Object.freeze({ factId: IDS.termFact, revisionId: IDS.termRevision, contentDigest: DIGEST_A, retrieverVersion: "fts-v1",
     state: "active", kind: "term", language: "ja", targetLanguages: Object.freeze(["zh-CN"]), term: "倍率色収差",
-    variants: Object.freeze(["倍率の色収差"]) }),
+    preferredTranslations: Object.freeze([Object.freeze({ language: "zh-CN", text: "倍率色差" })]), variants: Object.freeze(["倍率の色収差"]) }),
   Object.freeze({ factId: "10000000-0000-4000-8000-000000000008", revisionId: "10000000-0000-4000-8000-000000000009",
     contentDigest: DIGEST_B, retrieverVersion: "fts-v1", state: "active", kind: "term", language: "ja",
-    targetLanguages: Object.freeze(["zh-CN"]), term: "色収差", variants: Object.freeze([]) }),
+    targetLanguages: Object.freeze(["zh-CN"]), term: "色収差",
+    preferredTranslations: Object.freeze([Object.freeze({ language: "zh-CN", text: "色差" })]), variants: Object.freeze([]) }),
 ]);
 
 const retriever = Object.freeze({
@@ -95,6 +102,63 @@ test("thinking Planner input contains source text and bounded coverage without l
   const body = buildDetectorV3DeepSeekBody({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 65_536 });
   assert.deepEqual(body.thinking, { type: "enabled" });
   assert.equal(body.response_format.type, "json_object");
+  assert.equal(buildDetectorV3DeepSeekBody({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 65_536, temperature: 1 }).temperature, 1);
+});
+
+test("Planner Lite sends short references and approved answers while retaining lineage only in the control plane", () => {
+  const coverage = assembleDetectorV3Coverage({ document, approvedTerms, retriever });
+  const input = buildDetectorV3LiteModelInput(coverage);
+  assert.deepEqual(input.segments.map((item) => item.ref), ["s001", "s002"]);
+  assert.equal(input.knownAnswers[0].preferredTranslation, "倍率色差");
+  assert.equal(input.knownAnswers[0].segmentRef, "s001");
+  assert.equal(input.knowledgeHints[0].ref, "h001");
+  const serialized = JSON.stringify(input);
+  for (const hidden of [IDS.document, IDS.termFact, IDS.termRevision, coverage.exactBindings[0].bindingId,
+    coverage.knowledgeHits[0].hitId, "contentDigest", "retrieverVersion", "start", "end"]) assert.equal(serialized.includes(hidden), false);
+  const body = buildDetectorV3LiteDeepSeekBody({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 65_536, temperature: 1 });
+  assert.equal(body.temperature, 1); assert.equal(body.thinking.type, "enabled");
+  assert.match(body.messages[0].content, /Complete valid example/);
+  assert.match(body.messages[0].content, /knownAnswers/);
+});
+
+test("Planner Lite binds short references strictly and derives issue and batch identity locally", () => {
+  const coverage = assembleDetectorV3Coverage({ document, approvedTerms, retriever });
+  const normalized = normalizeDetectorV3LitePayload({ items: [{ kind: "fact", impact: "high",
+    spans: [{ segmentRef: "s002", quote: "球面収差を補正する" }], question: "确认补偿关系是否准确",
+    knowledgeHintRefs: ["h001"], batch: "镜头像差关系" }] }, coverage);
+  assert.equal(normalized.items[0].issue, "fact-verification");
+  assert.equal(normalized.items[0].sourceSpans[0].segmentId, IDS.second);
+  assert.equal(normalized.items[0].suggestedKnowledgeHitIds[0], coverage.knowledgeHits[0].hitId);
+  assert.match(normalized.items[0].researchBatchHint, /^lite-[0-9a-f]{16}$/u);
+  const item = { kind: "term", impact: "high", spans: [{ segmentRef: "s999", quote: "球面収差" }],
+    question: "确认译法", knowledgeHintRefs: [], batch: null };
+  assert.throws(() => normalizeDetectorV3LitePayload({ items: [item] }, coverage), /segment reference/);
+  assert.throws(() => normalizeDetectorV3LitePayload({ items: [{ ...item, spans: [{ segmentRef: "s002", quote: "不存在" }] }] }, coverage), /source quote/);
+  assert.throws(() => normalizeDetectorV3LitePayload({ items: [{ ...item, spans: [{ segmentRef: "s002", quote: "球面収差" }],
+    knowledgeHintRefs: ["h999"] }] }, coverage), /hint reference/);
+});
+
+test("Planner prompt experiment fixes a balanced 48-call initial matrix and 12-call confirmation matrix", () => {
+  const coverages = [1, 2, 3, 4].map((ordinal) => ({ document: { documentId: `document-${ordinal}`, language: ordinal % 2 ? "ja" : "zh-CN",
+    targetLanguage: ordinal % 2 ? "zh-CN" : "ja" } }));
+  const initial = buildPlannerExperimentMatrix(coverages);
+  assert.equal(initial.length, 48); assert.equal(new Set(initial.map((item) => item.taskId)).size, 48);
+  for (const variant of ["current-v1", "lite-v1"]) for (const temperature of [0, 1]) for (const coverage of coverages) {
+    assert.equal(initial.filter((item) => item.promptVariant === variant && item.temperature === temperature
+      && item.documentId === coverage.document.documentId).length, 3);
+  }
+  const confirmation = buildPlannerExperimentMatrix(coverages, { phase: "confirmation", promptVariant: "lite-v1", temperature: 1 });
+  assert.equal(confirmation.length, 12); assert.ok(confirmation.every((item) => item.promptVariant === "lite-v1" && item.temperature === 1));
+});
+
+test("Planner prompt metrics show Lite removes model-facing control-plane overhead", () => {
+  const coverage = assembleDetectorV3Coverage({ document, approvedTerms, retriever });
+  const metrics = plannerExperimentPromptMetrics([coverage, coverage, coverage, coverage]);
+  const current = metrics.find((item) => item.promptVariant === "current-v1" && item.temperature === 0);
+  const lite = metrics.find((item) => item.promptVariant === "lite-v1" && item.temperature === 0);
+  assert.ok(lite.systemCharacters < current.systemCharacters);
+  assert.ok(lite.userCharacters < current.userCharacters);
+  assert.notEqual(lite.bodyDigest, current.bodyDigest);
 });
 
 test("Planner output is source-anchored and keeps KnowledgeIdentity separate from ResearchBatch", () => {
@@ -182,4 +246,18 @@ test("Detector v3 DeepSeek adapter keeps thinking enabled and retries one known 
   assert.match(requests[1].messages[2].content, /payload-json/);
   assert.match(requests[1].messages[2].content, /byte-for-byte substring/);
   assert.match(requests[1].messages[2].content, /issue is never style/);
+});
+
+test("Detector v3 DeepSeek adapter applies Lite payload validation and temperature without retry", async () => {
+  const coverage = assembleDetectorV3Coverage({ document, approvedTerms, retriever }); const requests = [];
+  const content = JSON.stringify({ items: [{ kind: "term", impact: "high", spans: [{ segmentRef: "s002", quote: "球面収差" }],
+    question: "确认标准译法", knowledgeHintRefs: ["h001"], batch: "像差术语" }] });
+  const fetchImpl = async (_url, request) => { requests.push(JSON.parse(request.body)); const raw = JSON.stringify({ id: "lite-response",
+    choices: [{ index: 0, finish_reason: "stop", message: { content, reasoning_content: "private reasoning" } }],
+    usage: { prompt_tokens: 12, completion_tokens: 22, total_tokens: 34, completion_tokens_details: { reasoning_tokens: 9 } } });
+    return { ok: true, status: 200, headers: { get: () => null, entries: () => [] }, arrayBuffer: async () => Buffer.from(raw) }; };
+  const result = await invokeM5EDetectorV3DeepSeek({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 65_536,
+    maximumAttempts: 1, promptVariant: "lite-v1", temperature: 1 }, { credential: "fixture-key", fetchImpl });
+  assert.equal(requests.length, 1); assert.equal(requests[0].temperature, 1); assert.match(requests[0].messages[0].content, /Complete valid example/);
+  assert.equal(result.items[0].issue, "preferred-translation"); assert.equal(result.usage.calls, 1);
 });
