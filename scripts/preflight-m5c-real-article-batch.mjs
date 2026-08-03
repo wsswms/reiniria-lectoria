@@ -26,6 +26,9 @@ try {
   }
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-article-batch-preflight-v1", status: "ready",
     dataClass: "user-provided-public-articles", model: "deepseek-v4-flash", documents, maximums: batchLimits(documents),
-    thinkingModes: ["disabled", "enabled"], sameTargetRevisionRequired: true, rawResponsesRetained: false,
-    reasoningRetained: false, credentialInjection: "current-user-0600-file-to-fd-brokers" })}\n`);
+    thinkingModes: ["disabled", "enabled"], sameTargetRevisionRequired: true, rawResponsesRetained: true,
+    reasoningRetained: true, auditFormat: "per-call-0600-jsonl-with-incremental-manifest",
+    evaluationLimits: { plannerOutputTokens: 384_000, translationOutputTokensPerSegment: 16_384,
+      qaOutputTokensPerMode: 384_000, responseBytes: 64 * 1024 * 1024 },
+    credentialInjection: "current-user-0600-file-to-fd-brokers" })}\n`);
 } finally { await credential?.close(); }

@@ -11,7 +11,7 @@ export class BrokerProcessError extends Error {
   }
 }
 
-export function invokeBrokerProcess({ request, credentialRef, credential, credentialFd, faultMode }, {
+export function invokeBrokerProcess({ request, credentialRef, credential, credentialFd, auditFd, evaluationScope, faultMode }, {
   entry = new URL("./broker-entry.mjs", import.meta.url), timeoutMs = 5_000, outputBytes = 4 * 1024 * 1024,
 } = {}) {
   const stringCredential = typeof credential === "string";
@@ -20,11 +20,12 @@ export function invokeBrokerProcess({ request, credentialRef, credential, creden
     || (stringCredential && (credential.length === 0 || Buffer.byteLength(credential) > 16 * 1024))) {
     throw new TypeError("broker credential is invalid");
   }
+  if (auditFd !== undefined && (!Number.isSafeInteger(auditFd) || auditFd < 0 || auditFd === credentialFd)) throw new TypeError("broker audit descriptor is invalid");
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [entry instanceof URL ? entry.pathname : entry], {
       cwd: tmpdir(),
       env: Object.freeze({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", NODE_ENV: "production" }),
-      stdio: ["pipe", "pipe", "ignore", descriptorCredential ? credentialFd : "pipe"],
+      stdio: ["pipe", "pipe", "ignore", descriptorCredential ? credentialFd : "pipe", auditFd === undefined ? "ignore" : auditFd],
       shell: false,
     });
     const chunks = [];
@@ -59,7 +60,8 @@ export function invokeBrokerProcess({ request, credentialRef, credential, creden
     });
     child.stdin.on("error", () => {});
     child.stdio[3]?.on("error", () => {});
-    child.stdin.end(JSON.stringify({ request, credentialRef, faultMode }));
+    child.stdin.end(JSON.stringify({ request, credentialRef, faultMode, auditEnabled: auditFd !== undefined,
+      ...(evaluationScope === undefined ? {} : { evaluationScope }) }));
     if (stringCredential) child.stdio[3].end(credential);
   });
 }

@@ -1,3 +1,5 @@
+import { auditError, evaluationOutputTokens, evaluationResponseBytes, REAL_ARTICLE_EVALUATION_SCOPE, responseHeaders } from "../provider/llm-call-audit.mjs";
+
 const ORIGIN = "https://api.deepseek.com";
 const ROLES = new Set(["planner", "qa"]);
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -38,14 +40,18 @@ function boundedJson(value, maximum = 256 * 1024) {
 
 function requestContract(input) {
   const thinking = input?.thinking ?? "disabled";
-  exact(input, ["role", "modelId", "request", "maxOutputTokens", ...(input?.thinking === undefined ? [] : ["thinking"])], "request-keys");
+  const evaluationScope = input?.evaluationScope;
+  exact(input, ["role", "modelId", "request", "maxOutputTokens", ...(input?.thinking === undefined ? [] : ["thinking"]),
+    ...(evaluationScope === undefined ? [] : ["evaluationScope"])], "request-keys");
   if (!ROLES.has(input.role) || !MODEL_ID.test(input.modelId ?? "") || !Number.isSafeInteger(input.maxOutputTokens)
-    || input.maxOutputTokens < 1 || input.maxOutputTokens > MAX_OUTPUT_TOKENS || !THINKING_MODES.has(thinking)
+    || input.maxOutputTokens < 1 || input.maxOutputTokens > evaluationOutputTokens(evaluationScope, MAX_OUTPUT_TOKENS)
+    || (evaluationScope !== undefined && evaluationScope !== REAL_ARTICLE_EVALUATION_SCOPE) || !THINKING_MODES.has(thinking)
     || (thinking === "enabled" && input.role !== "qa")) throw fail("policy");
   const request = boundedJson(input.request, 2 * 1024 * 1024);
   if ((input.role === "planner" && request.schemaVersion !== "m5c-planner-request-v1")
     || (input.role === "qa" && request.schemaVersion !== "m5c-model-qa-request-v1")) throw fail("policy");
-  return Object.freeze({ role: input.role, modelId: input.modelId, request, maxOutputTokens: input.maxOutputTokens, thinking });
+  return Object.freeze({ role: input.role, modelId: input.modelId, request, maxOutputTokens: input.maxOutputTokens, thinking,
+    ...(evaluationScope === undefined ? {} : { evaluationScope }) });
 }
 
 function instruction(role) {
@@ -138,17 +144,40 @@ function http(status) {
 }
 
 export class M5CDeepSeekRoleAdapter {
-  constructor({ fetchImpl = globalThis.fetch } = {}) { if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required"); this.fetchImpl = fetchImpl; }
+  constructor({ fetchImpl = globalThis.fetch, audit } = {}) { if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
+    if (audit !== undefined && typeof audit !== "function") throw new TypeError("audit recorder must be a function"); this.fetchImpl = fetchImpl; this.audit = audit; }
   async invoke(input, { credential, signal } = {}) {
-    const request = requestContract(input); if (typeof credential !== "string" || credential.length < 1 || /\s/u.test(credential)) throw fail("auth");
-    const outbound = buildM5CDeepSeekRoleRequest(request); let response;
-    try { response = await this.fetchImpl(outbound.url, { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
-      body: JSON.stringify(outbound.body), redirect: "error", signal }); }
-    catch (error) { throw fail(signal?.aborted || error?.name === "AbortError" ? "canceled" : "unknown-outcome"); }
-    if (!response || typeof response.status !== "number") throw fail("malformed-response"); if (!response.ok) throw http(response.status);
-    const declared = Number(response.headers?.get?.("content-length")); if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw fail("malformed-response");
-    const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > MAX_RESPONSE_BYTES) throw fail("malformed-response");
-    let body; try { body = JSON.parse(bytes.toString("utf8")); } catch { throw fail("malformed-response"); }
-    return normalizeM5CDeepSeekRoleResponse(body, request);
+    const request = requestContract(input); const outbound = buildM5CDeepSeekRoleRequest(request); const started = Date.now(); const startedAt = new Date(started).toISOString();
+    let response; let rawResponseText = null; let rawResponse = null; let normalized; let caught;
+    if (this.audit) this.audit(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "request", provider: "deepseek", role: request.role,
+      evaluationScope: request.evaluationScope ?? null, startedAt, request: Object.freeze({ url: outbound.url, method: "POST",
+        headers: Object.freeze({ "content-type": "application/json" }), body: outbound.body,
+        bodyBytes: Buffer.byteLength(JSON.stringify(outbound.body)) }) }));
+    try {
+      if (typeof credential !== "string" || credential.length < 1 || /\s/u.test(credential)) throw fail("auth");
+      try { response = await this.fetchImpl(outbound.url, { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
+        body: JSON.stringify(outbound.body), redirect: "error", signal }); }
+      catch (error) { throw fail(signal?.aborted || error?.name === "AbortError" ? "canceled" : "unknown-outcome"); }
+      if (!response || typeof response.status !== "number") throw fail("malformed-response");
+      const maximum = evaluationResponseBytes(request.evaluationScope, MAX_RESPONSE_BYTES);
+      const declared = Number(response.headers?.get?.("content-length")); if (Number.isFinite(declared) && declared > maximum) throw fail("malformed-response");
+      const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > maximum) throw fail("malformed-response");
+      rawResponseText = bytes.toString("utf8"); try { rawResponse = JSON.parse(rawResponseText); } catch { if (response.ok) throw fail("malformed-response"); }
+      if (!response.ok) throw http(response.status);
+      normalized = normalizeM5CDeepSeekRoleResponse(rawResponse, request); return normalized;
+    } catch (error) { caught = error instanceof M5CDeepSeekRoleError ? error : fail("malformed-response"); throw caught; }
+    finally {
+      if (this.audit) {
+        const choice = rawResponse?.choices?.[0]; const completed = Date.now();
+        this.audit(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "response", provider: "deepseek", role: request.role,
+          evaluationScope: request.evaluationScope ?? null, startedAt, completedAt: new Date(completed).toISOString(), elapsedMs: completed - started,
+          response: response ? Object.freeze({ status: response.status, headers: responseHeaders(response.headers),
+            bodyBytes: rawResponseText === null ? null : Buffer.byteLength(rawResponseText), rawBody: rawResponseText,
+            content: choice?.message?.content ?? null, reasoningContent: choice?.message?.reasoning_content ?? null,
+            finishReason: choice?.finish_reason ?? null, usage: rawResponse?.usage ?? null }) : null,
+          outcome: caught ? Object.freeze({ normalized: false, error: auditError(caught) })
+            : Object.freeze({ normalized: true }) }));
+      }
+    }
   }
 }

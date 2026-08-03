@@ -108,3 +108,20 @@ test("DeepSeek usage, HTTP, disconnect, cancellation and credentials fail closed
   await assert.rejects(new DeepSeekProvider({ fetchImpl: async () => { throw new DOMException("aborted", "AbortError"); } }).invoke(input, { credential: secret, signal: controller.signal }), (error) => error.category === "canceled" && !error.retryable);
   await assert.rejects(new DeepSeekProvider({ fetchImpl: async () => { throw new Error("must not run"); } }).invoke(input, { credential: "bad key" }), (error) => error.category === "auth");
 });
+
+test("DeepSeek translation evaluation audit retains raw final output reasoning and malformed bodies without authorization", async () => {
+  const input = request(1); const secret = `TRANSLATION-AUDIT-SECRET-${randomUUID()}`; const records = [];
+  const adapter = new DeepSeekProvider({ fetchImpl: async () => new Response(JSON.stringify(success(input)), { status: 200 }),
+    audit: (record) => records.push(record), evaluationScope: "m5c-real-article-audit-v1" });
+  await adapter.invoke({ ...input, maxOutputTokens: 16_384 }, { credential: secret });
+  assert.equal(records.length, 2); assert.equal(records[0].role, "translation");
+  assert.equal(records[1].response.reasoningContent, "must never be persisted");
+  assert.equal(records[1].outcome.normalized, true); assert.equal(records[0].request.body.max_tokens, 16_384);
+  assert.equal(JSON.stringify(records).includes(secret), false); assert.equal(JSON.stringify(records).includes("authorization"), false);
+
+  const malformed = [];
+  await assert.rejects(new DeepSeekProvider({ fetchImpl: async () => new Response("broken-json", { status: 200 }),
+    audit: (record) => malformed.push(record), evaluationScope: "m5c-real-article-audit-v1" }).invoke(input, { credential: secret }),
+  (error) => error.category === "malformed-response");
+  assert.equal(malformed[1].response.rawBody, "broken-json"); assert.equal(malformed[1].outcome.normalized, false);
+});

@@ -1,4 +1,5 @@
 import { providerErrorContract, providerRequestContract, providerResponseContract } from "./contracts.mjs";
+import { auditError, evaluationResponseBytes, responseHeaders } from "./llm-call-audit.mjs";
 
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
 export const DEEPSEEK_API_ORIGIN = "https://api.deepseek.com";
@@ -150,36 +151,52 @@ export function normalizeDeepSeekResponse(input, requestInput) {
 }
 
 export class DeepSeekProvider {
-  constructor({ fetchImpl = globalThis.fetch } = {}) {
+  constructor({ fetchImpl = globalThis.fetch, audit, evaluationScope } = {}) {
     if (typeof fetchImpl !== "function") throw new TypeError("DeepSeek fetch implementation is required");
+    if (audit !== undefined && typeof audit !== "function") throw new TypeError("audit recorder must be a function");
     this.id = DEEPSEEK_PROVIDER_ID;
     this.fetchImpl = fetchImpl;
+    this.audit = audit;
+    this.evaluationScope = evaluationScope;
   }
 
   async invoke(input, { credential, signal } = {}) {
     const request = providerRequestContract(input);
     const outbound = buildDeepSeekRequest(request);
-    if (typeof credential !== "string" || credential.length === 0 || /\s/.test(credential)) throw failure("auth", false);
-    let response;
+    const started = Date.now(); const startedAt = new Date(started).toISOString();
+    let response; let rawResponseText = null; let rawResponse = null; let normalized; let caught;
+    if (this.audit) this.audit(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "request", provider: "deepseek", role: "translation",
+      evaluationScope: this.evaluationScope ?? null, startedAt, request: Object.freeze({ url: outbound.url, method: "POST",
+        headers: Object.freeze({ "content-type": "application/json" }), body: outbound.body,
+        bodyBytes: Buffer.byteLength(JSON.stringify(outbound.body)) }) }));
     try {
-      response = await this.fetchImpl(outbound.url, {
-        method: "POST",
-        headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
-        body: JSON.stringify(outbound.body),
-        redirect: "error",
-        signal,
-      });
+      if (typeof credential !== "string" || credential.length === 0 || /\s/.test(credential)) throw failure("auth", false);
+      try {
+        response = await this.fetchImpl(outbound.url, { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
+          body: JSON.stringify(outbound.body), redirect: "error", signal });
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw failure("canceled", false);
+        throw failure("unknown-outcome", false);
+      }
+      if (!response || typeof response.status !== "number") throw failure("malformed-response", false);
+      rawResponseText = await boundedResponseText(response, evaluationResponseBytes(this.evaluationScope, MAX_RESPONSE_BYTES));
+      try { rawResponse = JSON.parse(rawResponseText); } catch { if (response.ok) throw failure("malformed-response", false); }
+      if (!response.ok) throw httpFailure(response.status);
+      normalized = normalizeDeepSeekResponse(rawResponse, request); return normalized;
     } catch (error) {
-      if (signal?.aborted || error?.name === "AbortError") throw failure("canceled", false);
-      throw failure("unknown-outcome", false);
-    }
-    if (!response || typeof response.status !== "number") throw failure("malformed-response", false);
-    if (!response.ok) throw httpFailure(response.status);
-    try {
-      return normalizeDeepSeekResponse(JSON.parse(await boundedResponseText(response)), request);
-    } catch (error) {
-      if (error instanceof DeepSeekProviderError) throw error;
-      throw failure("malformed-response", false);
+      caught = error instanceof DeepSeekProviderError ? error : failure("malformed-response", false); throw caught;
+    } finally {
+      if (this.audit) {
+        const choice = rawResponse?.choices?.[0]; const completed = Date.now();
+        this.audit(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "response", provider: "deepseek", role: "translation",
+          evaluationScope: this.evaluationScope ?? null, startedAt, completedAt: new Date(completed).toISOString(), elapsedMs: completed - started,
+          response: response ? Object.freeze({ status: response.status, headers: responseHeaders(response.headers),
+            bodyBytes: rawResponseText === null ? null : Buffer.byteLength(rawResponseText), rawBody: rawResponseText,
+            content: choice?.message?.content ?? null, reasoningContent: choice?.message?.reasoning_content ?? null,
+            finishReason: choice?.finish_reason ?? null, usage: rawResponse?.usage ?? null }) : null,
+          outcome: caught ? Object.freeze({ normalized: false, error: auditError(caught) })
+            : Object.freeze({ normalized: true }) }));
+      }
     }
   }
 }

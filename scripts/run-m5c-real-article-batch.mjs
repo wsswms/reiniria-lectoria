@@ -17,12 +17,15 @@ import { ValidationService } from "../src/translation/validator.mjs";
 import { WorkCopyService } from "../src/translation/work-copy-service.mjs";
 import { workspace as applicationWorkspace } from "../tests/m3-4/helpers.mjs";
 import { REAL_ARTICLES, batchLimits, pairedQaSummary, readPrivateArticle } from "./m5c-real-article-batch.mjs";
+import { RealArticleAuditSession } from "./m5c-real-article-audit.mjs";
+import { REAL_ARTICLE_EVALUATION_SCOPE, REAL_ARTICLE_MAX_OUTPUT_TOKENS, REAL_ARTICLE_MAX_RESPONSE_BYTES } from "../src/provider/llm-call-audit.mjs";
 
 const USER = Object.freeze({ type: "user", id: "m5c-real-article-batch-owner" });
 const SYSTEM = Object.freeze({ type: "system", id: "m5c-real-article-batch-control-plane" });
 const MODEL_ID = "deepseek-v4-flash";
 const PRICING_VERSION = "deepseek-v4-flash-2026-08-03-conservative-cny-v1";
 const MODES = Object.freeze(["disabled", "enabled"]);
+const TRANSLATION_OUTPUT_TOKENS = 16_384;
 const FIXED = Object.freeze({
   "nikon-omoshiro-part1": Object.freeze({ digest: "sha256:3a94942c23690d11c7a61527e3778c61fc557cb6a1af2596d40d57ae33d6fc5d", segmentCount: 54 }),
   "nikon-omoshiro-part2": Object.freeze({ digest: "sha256:fb274eb8b2d77f63a15bb28128353de042a196589a535992721a6789336c7945", segmentCount: 62 }),
@@ -36,15 +39,17 @@ const progress = (documentId, phase, completed, total) => process.stderr.write(`
 function articleBudget(segmentCount) {
   const zero = Object.freeze({ maxCalls: 0, maxInputTokens: 0, maxOutputTokens: 0, maxCostMicrosCny: 0, maxCostMicrosUsd: 0, maxDurationMs: 0 });
   return Object.freeze({ ...DEFAULT_FLOW_BUDGET, maxCalls: segmentCount + 3, maxInputTokens: 2_000_000,
-    maxOutputTokens: segmentCount * 2_048 + 36_864, maxCostMicrosCny: 500_000, maxCostMicrosUsd: 0,
-    maxDurationMs: 4_000_000, maxResearchCycles: 1, maxQaCycles: 2, maxRetranslations: 1, maxUnknownOutcomes: 1,
+    maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS * 3 + segmentCount * TRANSLATION_OUTPUT_TOKENS,
+    maxCostMicrosCny: 15_000_000, maxCostMicrosUsd: 0,
+    maxDurationMs: 14_000_000, maxResearchCycles: 1, maxQaCycles: 2, maxRetranslations: 1, maxUnknownOutcomes: 1,
     categories: Object.freeze({
-      planner: Object.freeze({ maxCalls: 1, maxInputTokens: 100_000, maxOutputTokens: 4_096, maxCostMicrosCny: 30_000, maxCostMicrosUsd: 0, maxDurationMs: 120_000 }),
+      planner: Object.freeze({ maxCalls: 1, maxInputTokens: 100_000, maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS,
+        maxCostMicrosCny: 2_500_000, maxCostMicrosUsd: 0, maxDurationMs: 600_000 }),
       search: zero, fetch: zero, research: zero,
-      translation: Object.freeze({ maxCalls: segmentCount, maxInputTokens: 1_500_000, maxOutputTokens: segmentCount * 2_048,
-        maxCostMicrosCny: 350_000, maxCostMicrosUsd: 0, maxDurationMs: segmentCount * 30_000 }),
-      qa: Object.freeze({ maxCalls: 2, maxInputTokens: 400_000, maxOutputTokens: 32_768, maxCostMicrosCny: 120_000,
-        maxCostMicrosUsd: 0, maxDurationMs: 360_000 }),
+      translation: Object.freeze({ maxCalls: segmentCount, maxInputTokens: 1_500_000, maxOutputTokens: segmentCount * TRANSLATION_OUTPUT_TOKENS,
+        maxCostMicrosCny: 7_000_000, maxCostMicrosUsd: 0, maxDurationMs: segmentCount * 180_000 }),
+      qa: Object.freeze({ maxCalls: 2, maxInputTokens: 400_000, maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS * 2,
+        maxCostMicrosCny: 5_500_000, maxCostMicrosUsd: 0, maxDurationMs: 1_200_000 }),
       retranslation: zero,
     }) });
 }
@@ -68,15 +73,16 @@ function artifactDocument({ article, source, bundle, phase, plannerMode, context
     source: Object.freeze({ bytes: source.bytes, digest: source.digest, segmentCount: bundle.segments.length }), plannerMode, contextItemCount,
     targetWorkingCopyDigest: bundle.digest, segments: Object.freeze(bundle.segments.map((segment, ordinal) => Object.freeze({ ordinal,
       segmentId: segment.segmentId, sourceText: segment.sourceText, targetText: segment.text, targetDigest: segment.textDigest }))),
-    translationCalls, validation, qa: Object.freeze(qa), rawResponsesRetained: false, reasoningRetained: false,
+    translationCalls, validation, qa: Object.freeze(qa), rawResponsesRetained: true, reasoningRetained: true,
     automaticRetries: 0, approvalPerformed: false, riskAcceptancePerformed: false, exportPerformed: false });
 }
 
 if (process.env.M5C_REAL_ARTICLE_BATCH !== "execute") throw new Error("real article batch requires M5C_REAL_ARTICLE_BATCH=execute");
 
-let credential; let stage = "preflight"; let currentDocumentId = null; const completed = [];
+let credential; let audit; let stage = "preflight"; let currentDocumentId = null; const completed = [];
 try {
   const outputRoot = await privateOutputDirectory(process.env.M5C_REAL_ARTICLE_OUTPUT_DIR);
+  audit = await RealArticleAuditSession.create(outputRoot);
   credential = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE);
   const sources = [];
   for (const article of REAL_ARTICLES) {
@@ -97,10 +103,13 @@ try {
         targetLanguage: article.targetLanguage, budget: articleBudget(fixed.segmentCount) }, USER);
 
       stage = "planner"; const planner = new M5CPlannerExecutor(fixture.database, fixture.workspaceId, { plans,
-        invokePlanner: (request) => invokeM5CModelBroker({ credentialFd: credential.fd,
-          request: { role: "planner", modelId: MODEL_ID, request, maxOutputTokens: 4_096, thinking: "disabled" } }, { timeoutMs: 120_000 }) });
+        invokePlanner: (request) => audit.invoke(`planner-${article.id}`, { articleId: article.id, role: "planner", thinking: "disabled" },
+          (auditFd) => invokeM5CModelBroker({ credentialFd: credential.fd, auditFd,
+            request: { role: "planner", modelId: MODEL_ID, request, maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS,
+              thinking: "disabled", evaluationScope: REAL_ARTICLE_EVALUATION_SCOPE } },
+          { timeoutMs: 600_000, outputBytes: REAL_ARTICLE_MAX_RESPONSE_BYTES })) });
       const planned = await planner.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID, idempotencyKey: `${article.id}:planner`,
-        estimatedUsage: estimate(1, 100_000, 4_096, 30_000, 120_000) });
+        estimatedUsage: estimate(1, 100_000, REAL_ARTICLE_MAX_OUTPUT_TOKENS, 2_500_000, 600_000) });
       if (planned.status !== "model-assisted") throw Object.assign(new Error("real article Planner did not complete"), { category: planned.category ?? "provider" });
       progress(article.id, "planner-completed", 1, 1);
       flow = plans.submitPlan(workflowId, planned.plan.planHead.version, SYSTEM); flow = plans.decidePlan(workflowId, flow.planHead.version, "approved", USER);
@@ -109,17 +118,21 @@ try {
       context = contexts.decide(workflowId, context.head.version, "approved", USER);
       const queued = contexts.enqueueTranslation(workflowId, { providerId: "deepseek", modelId: MODEL_ID,
         policyVersion: `${article.id}:provider-budget`, idempotencyKey: `${article.id}:translation`, maxAttempts: 1, batchSize: 1,
-        estimatedUsage: estimate(fixed.segmentCount, 1_500_000, fixed.segmentCount * 2_048, 350_000, fixed.segmentCount * 30_000) });
+        estimatedUsage: estimate(fixed.segmentCount, 1_500_000, fixed.segmentCount * TRANSLATION_OUTPUT_TOKENS,
+          7_000_000, fixed.segmentCount * 180_000) });
       const pricing = new PricingBudgetService(fixture.database, fixture.workspaceId);
       pricing.addPricing({ providerId: "deepseek", modelId: MODEL_ID, pricingVersion: PRICING_VERSION, currency: "CNY",
         inputMicrosPerMillion: 2_800_000, outputMicrosPerMillion: 5_600_000, cachedInputMicrosPerMillion: 56_000,
         source: "official-2026-08-03-usd-pricing-at-10-cny-per-usd-and-2x-peak-ceiling" });
-      pricing.addPolicy({ policyVersion: `${article.id}:provider-budget`, currency: "CNY", softLimitMicros: 350_000,
-        hardLimitMicros: 350_000, unknownPriceAction: "block" }); pricing.assignTask(queued.task.task.task_id, `${article.id}:provider-budget`);
+      pricing.addPolicy({ policyVersion: `${article.id}:provider-budget`, currency: "CNY", softLimitMicros: 7_000_000,
+        hardLimitMicros: 7_000_000, unknownPriceAction: "block" }); pricing.assignTask(queued.task.task.task_id, `${article.id}:provider-budget`);
 
       stage = "translation"; const executor = new TranslationExecutor(fixture.database, fixture.workspaceId, { budgets: pricing,
-        pricingVersion: PRICING_VERSION, credentialRef: "external-file:deepseek/m5c-real-articles", estimatedOutputTokens: 2_048,
-        invokeProvider: (request, { credentialRef }) => invokeBrokerProcess({ request, credentialRef, credentialFd: credential.fd }, { timeoutMs: 120_000 }) });
+        pricingVersion: PRICING_VERSION, credentialRef: "external-file:deepseek/m5c-real-articles", estimatedOutputTokens: TRANSLATION_OUTPUT_TOKENS,
+        invokeProvider: (request, { credentialRef }) => audit.invoke(`translation-${article.id}-${request.segments[0].segmentId}`,
+          { articleId: article.id, role: "translation", thinking: "disabled", segmentId: request.segments[0].segmentId },
+          (auditFd) => invokeBrokerProcess({ request, credentialRef, credentialFd: credential.fd, auditFd,
+            evaluationScope: REAL_ARTICLE_EVALUATION_SCOPE }, { timeoutMs: 180_000, outputBytes: REAL_ARTICLE_MAX_RESPONSE_BYTES })) });
       const results = [];
       while (true) {
         const result = await executor.executeNext(); if (result.status === "idle") break;
@@ -146,10 +159,13 @@ try {
       stage = "paired-qa"; const qaService = new M5CQAService(fixture.database, fixture.workspaceId, { workCopies: copies }); const qa = [];
       for (const mode of MODES) {
         const qaExecutor = new M5CModelQAExecutor(fixture.database, fixture.workspaceId, { workCopies: copies, qa: qaService,
-          invokeModelQa: (request) => invokeM5CModelBroker({ credentialFd: credential.fd,
-            request: { role: "qa", modelId: MODEL_ID, request, maxOutputTokens: 16_384, thinking: mode } }, { timeoutMs: 180_000 }) });
+          invokeModelQa: (request) => audit.invoke(`qa-${mode}-${article.id}`, { articleId: article.id, role: "qa", thinking: mode },
+            (auditFd) => invokeM5CModelBroker({ credentialFd: credential.fd, auditFd,
+              request: { role: "qa", modelId: MODEL_ID, request, maxOutputTokens: REAL_ARTICLE_MAX_OUTPUT_TOKENS,
+                thinking: mode, evaluationScope: REAL_ARTICLE_EVALUATION_SCOPE } },
+            { timeoutMs: 600_000, outputBytes: REAL_ARTICLE_MAX_RESPONSE_BYTES })) });
         const result = await qaExecutor.execute(workflowId, { providerId: "deepseek", modelId: MODEL_ID,
-          idempotencyKey: `${article.id}:qa:${mode}`, estimatedUsage: estimate(1, 200_000, 16_384, 60_000, 180_000) });
+          idempotencyKey: `${article.id}:qa:${mode}`, estimatedUsage: estimate(1, 200_000, REAL_ARTICLE_MAX_OUTPUT_TOKENS, 2_750_000, 600_000) });
         qa.push(pairedQaSummary(mode, result.run, result.settlement)); bundle = copies.getBundle(workflowId);
         progress(article.id, `qa-${mode}-completed`, qa.at(-1).findings.length, qa.at(-1).findings.length);
         await saveArtifact(outputRoot, article.id, artifactDocument({ article, source, bundle, phase: `qa-${mode}`, plannerMode: planned.status,
@@ -166,13 +182,17 @@ try {
       progress(article.id, "completed");
     } finally { await fixture.close(); }
   }
+  const auditSummary = await audit.summary();
   process.stdout.write(`${JSON.stringify({ schemaVersion: "m5c-real-article-batch-result-v1", status: "completed-awaiting-user-disposition",
-    documents: completed, maximums, rawResponsesRetained: false, reasoningRetained: false, approvalPerformed: false,
+    documents: completed, maximums, audit: { calls: auditSummary.calls, manifestDigest: auditSummary.manifestDigest },
+    rawResponsesRetained: true, reasoningRetained: true, approvalPerformed: false,
     riskAcceptancePerformed: false, exportPerformed: false })}\n`);
 } catch (error) {
   const allowed = new Set(["auth", "budget", "canceled", "malformed-response", "policy", "provider", "rate-limit", "timeout", "unknown-outcome"]);
+  const auditSummary = await audit?.summary().catch(() => null);
   process.stderr.write(`${JSON.stringify({ status: "failed", stage, documentId: currentDocumentId,
     completedDocumentIds: completed.map((item) => item.id), category: allowed.has(error?.category) ? error.category : "evaluation",
+    audit: auditSummary ? { calls: auditSummary.calls, manifestDigest: auditSummary.manifestDigest } : null,
     code: typeof error?.code === "string" && /^[A-Z0-9_]{1,64}$/u.test(error.code) ? error.code : null,
     providerCode: typeof error?.providerCode === "string" && /^[a-z0-9_-]{1,64}$/u.test(error.providerCode) ? error.providerCode : null })}\n`);
   process.exitCode = 1;

@@ -26,7 +26,8 @@ export function batchLimits(documents) {
     return sum + item.segmentCount;
   }, 0);
   return Object.freeze({ plannerCalls: 2, translationCalls, qaCalls: 4, maximumDeepSeekCalls: translationCalls + 6,
-    maximumCostMicrosCny: 1_000_000, automaticRetries: 0, braveCalls: 0, fetchCalls: 0, researchModelCalls: 0 });
+    priorFailedPlannerCalls: 1, maximumCumulativeDeepSeekCalls: translationCalls + 7,
+    maximumCostMicrosCny: 30_000_000, automaticRetries: 0, braveCalls: 0, fetchCalls: 0, researchModelCalls: 0 });
 }
 
 export function pairedQaSummary(mode, run, settlement) {
