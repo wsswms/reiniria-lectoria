@@ -57,6 +57,8 @@
     "evaluate:m5c.5:real-qa": "node scripts/run-m5c-real-qa-evaluation.mjs",
     "preflight:m5c.5:real-qa-thinking": "node scripts/preflight-m5c-real-qa-thinking-comparison.mjs",
     "compare:m5c.5:real-qa-thinking": "node scripts/run-m5c-real-qa-thinking-comparison.mjs",
+    "preflight:m5c.5:real-articles": "node scripts/preflight-m5c-real-article-batch.mjs",
+    "exercise:m5c.5:real-articles": "node scripts/run-m5c-real-article-batch.mjs",
     "exercise:m5c.5:real": "node scripts/run-m5c-real-evaluation.mjs"
   },
   "dependencies": {
