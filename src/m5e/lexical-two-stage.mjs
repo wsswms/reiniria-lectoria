@@ -69,7 +69,7 @@ export const LEXICAL_STAGE_A_SYSTEM_PROMPT_V2 = [
   'Complete valid example: {"items":[{"quotes":["軸上色収差"]}]}',
 ].join(" ");
 
-export const LEXICAL_STAGE_A_SYSTEM_PROMPT = LEXICAL_STAGE_A_SYSTEM_PROMPT_V2;
+export const LEXICAL_STAGE_A_SYSTEM_PROMPT = LEXICAL_STAGE_A_SYSTEM_PROMPT_V1;
 
 function lexicalStageAPrompt(version) {
   if (version === LEXICAL_STAGE_A_RECALL_PROMPT_VERSION) return LEXICAL_STAGE_A_SYSTEM_PROMPT_V1;
@@ -86,7 +86,7 @@ export function buildLexicalStageAModelInput(coverageInput) {
 }
 
 export function buildLexicalStageABody({ coverage, modelId, maxOutputTokens, omitTemperature = false,
-  stageAPromptVersion = LEXICAL_STAGE_A_PRECISION_PROMPT_VERSION }) {
+  stageAPromptVersion = LEXICAL_STAGE_A_RECALL_PROMPT_VERSION }) {
   configuration(modelId, maxOutputTokens, "lexical Stage A");
   return providerBody({ model: modelId, messages: Object.freeze([
     Object.freeze({ role: "system", content: lexicalStageAPrompt(stageAPromptVersion) }),

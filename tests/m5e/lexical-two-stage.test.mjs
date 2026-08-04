@@ -46,14 +46,13 @@ test("lexical Stage A sends only article text and a minimal quote-only JSON cont
   assert.equal(Object.hasOwn(pro, "temperature"), false);
   assert.equal(body.response_format.type, "json_object");
   assert.match(body.messages[0].content, /titleContext is context only/u);
-  assert.match(body.messages[0].content, /stable general bilingual and domain knowledge/u);
-  assert.match(body.messages[0].content, /An empty items array is valid/u);
-  assert.match(body.messages[0].content, /Precision is more important than producing a long glossary/u);
+  assert.match(body.messages[0].content, /Include technical terms, fixed domain expressions/u);
   assert.match(body.messages[0].content, /\{"items":\[\{"quotes":\["軸上色収差"\]\}\]\}/u);
-  const legacy = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
-    omitTemperature: true, stageAPromptVersion: "recall-v1" });
-  assert.match(legacy.messages[0].content, /Include technical terms, fixed domain expressions/u);
-  assert.doesNotMatch(legacy.messages[0].content, /An empty items array is valid/u);
+  const precision = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
+    omitTemperature: true, stageAPromptVersion: "precision-v2" });
+  assert.match(precision.messages[0].content, /stable general bilingual and domain knowledge/u);
+  assert.match(precision.messages[0].content, /An empty items array is valid/u);
+  assert.match(precision.messages[0].content, /Precision is more important than producing a long glossary/u);
   assert.throws(() => buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
     stageAPromptVersion: "unknown" }), /prompt version/u);
 });
