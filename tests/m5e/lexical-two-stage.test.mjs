@@ -53,6 +53,16 @@ test("lexical Stage A sends only article text and a minimal quote-only JSON cont
   assert.match(precision.messages[0].content, /stable general bilingual and domain knowledge/u);
   assert.match(precision.messages[0].content, /An empty items array is valid/u);
   assert.match(precision.messages[0].content, /Precision is more important than producing a long glossary/u);
+  const balanced = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
+    omitTemperature: true, stageAPromptVersion: "balanced-v3" });
+  assert.match(balanced.messages[0].content, /Include a specialized term when accurate target terminology or standard usage may benefit from verification/u);
+  assert.match(balanced.messages[0].content, /official names, organizations, and product series/u);
+  assert.match(balanced.messages[0].content, /pure model identifiers such as D700 or F2/u);
+  assert.match(balanced.messages[0].content, /camera settings or interface labels such as ISO or A-auto/u);
+  assert.match(balanced.messages[0].content, /When uncertain whether a specialized expression has a conventional target-domain equivalent, include it/u);
+  assert.doesNotMatch(balanced.messages[0].content, /Precision is more important/u);
+  assert.doesNotMatch(balanced.messages[0].content, /empty items array/u);
+  assert.doesNotMatch(balanced.messages[0].content, /When unsure whether external research is necessary, omit/u);
   assert.throws(() => buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
     stageAPromptVersion: "unknown" }), /prompt version/u);
 });
