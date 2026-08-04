@@ -25,7 +25,10 @@ try {
   const response = await invoke(envelope.request, { credential: credential(3), audit: auditWriterForDescriptor(4) });
   process.stdout.write(`${JSON.stringify({ ok: true, response })}\n`);
 } catch (error) {
+  const localCode = error?.category === undefined ? `${error?.code ?? error?.name ?? "local"}:${error?.message ?? "failure"}`
+    .replace(/[^A-Za-z0-9:._ -]/gu, "_").slice(0, 128) : undefined;
   process.stdout.write(`${JSON.stringify({ ok: false, error: { category: error?.category ?? "provider", retryable: false,
-    ...(error?.providerCode === undefined ? {} : { providerCode: String(error.providerCode).slice(0, 128) }) } })}\n`);
+    ...(error?.providerCode === undefined && localCode === undefined ? {}
+      : { providerCode: String(error?.providerCode ?? localCode).slice(0, 128) }) } })}\n`);
   process.exitCode = 1;
 }

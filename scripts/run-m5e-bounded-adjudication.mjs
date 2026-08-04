@@ -224,7 +224,12 @@ async function executeAttempt(task, paths, credentialFd, ordinal, attempt) {
   await writeFile(join(paths.calls, `${stem}.metadata.json`), `${JSON.stringify(metadata, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   const auditPath = join(paths.calls, `${stem}.jsonl`); const audit = await open(auditPath, "wx", 0o600); await chmod(auditPath, 0o600);
   try { await invokeM5EBoundedBrokerProcess({ credentialFd, auditFd: audit.fd, request }); }
-  catch (error) { if ((await audit.stat()).size === 0) throw error; } finally { await audit.close(); }
+  catch (error) {
+    let auditSize;
+    try { auditSize = (await audit.stat()).size; }
+    catch (statError) { throw new Error(`audit-stat:${statError?.code ?? "error"}:${statError?.message ?? "failure"}`); }
+    if (auditSize === 0) throw error;
+  } finally { await audit.close(); }
 }
 function eligible(tasks, state, attemptedInProcess) {
   const status = new Map(state.logical.map((item) => [item.taskId, item]));

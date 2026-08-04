@@ -17,9 +17,12 @@ export function invokeM5EBoundedBrokerProcess({ request, credentialFd, auditFd }
   if (!Number.isSafeInteger(credentialFd) || credentialFd < 0 || !Number.isSafeInteger(auditFd) || auditFd < 0
     || auditFd === credentialFd) throw new TypeError("bounded broker descriptor scope is invalid");
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entry instanceof URL ? entry.pathname : entry], { cwd: tmpdir(), shell: false,
-      env: Object.freeze({ PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", NODE_ENV: "production" }),
-      stdio: ["pipe", "pipe", "pipe", credentialFd, auditFd] });
+    let child;
+    try { child = spawn(process.execPath, [entry instanceof URL ? entry.pathname : entry], { cwd: tmpdir(), shell: false,
+      env: { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", NODE_ENV: "production" },
+      stdio: ["pipe", "pipe", "pipe", credentialFd, auditFd] }); }
+    catch (error) { reject(new M5EBoundedBrokerProcessError("provider", error?.code,
+      `broker-spawn-sync:${error?.name ?? "Error"}:${error?.message ?? "failure"}`)); return; }
     const chunks = []; const diagnostics = []; let size = 0; let diagnosticSize = 0; let forced;
     const timer = setTimeout(() => { forced = "unknown-outcome"; child.kill("SIGKILL"); }, timeoutMs);
     child.stdout.on("data", (chunk) => { size += chunk.length; if (size > outputBytes) { forced = "malformed-response"; child.kill("SIGKILL"); }
