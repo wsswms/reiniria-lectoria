@@ -6,6 +6,7 @@ import {
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS,
   SOURCE_LANGUAGE_ARTICLE_SUMMARY_SYSTEM_PROMPT,
+  SOURCE_ONLY_ARTICLE_SUMMARY_SYSTEM_PROMPT,
   buildArticleSummaryBody,
   buildArticleSummaryTranslationBody,
   buildArticleSummaryUncertaintyFixture,
@@ -65,6 +66,15 @@ test("abstract source summary excludes product names, specifications and concret
   assert.match(body.messages[0].content, /製品名、固有名詞、引用符付き表現、型番、数値、仕様、具体的な光学形式、個別の専門用語を一切書かない/);
   const valid = "過去の写真器材開発を題材に、企画から光学設計、試作、商品化へ至る経緯と、作例を用いた評価を開発担当者の回想に沿って紹介する記事。";
   assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task, "abstract-source-v3").promptVariant, "abstract-source-v3");
+});
+
+test("source-only summary permits Japanese domain context but forbids target-language answers", () => {
+  const task = buildArticleSummaryUncertaintyFixture(corpus, proposal).summaryTasks[0];
+  const body = buildArticleSummaryBody(task, "source-only-v4");
+  assert.equal(body.messages[0].content, SOURCE_ONLY_ARTICLE_SUMMARY_SYSTEM_PROMPT);
+  assert.match(body.messages[0].content, /中国語その他の言語への翻訳、日中対訳、訳語候補、翻訳助言、用語集を絶対に書かない/);
+  const valid = "1990年代の写真用交換レンズ開発を題材に、低価格な限定製品の企画、光学設計、試作、商品化の経緯と、作例による描写評価を開発担当者の回想に沿って紹介する記事。";
+  assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task, "source-only-v4").promptVariant, "source-only-v4");
 });
 
 test("paired translation bodies differ only by explicit non-authoritative article context", () => {
