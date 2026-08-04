@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   BOUNDED_ADJUDICATION_MAX_ACTUAL_ATTEMPTS,
   BOUNDED_ADJUDICATION_MAX_CONCURRENCY,
@@ -16,6 +19,7 @@ import {
   normalizeGoalConsolidationPayload,
 } from "../../src/m5e/lexical-bounded-adjudication.mjs";
 import { invokeM5ECandidateAdjudicationDeepSeek } from "../../scripts/m5e-bounded-adjudication-deepseek.mjs";
+import { invokeM5EBoundedBrokerProcess } from "../../scripts/m5e-bounded-adjudication-broker-process.mjs";
 
 const candidate = (ordinal, documentId = "d1") => Object.freeze({
   candidateId: `sha256:${ordinal.toString(16).padStart(64, "0")}`,
@@ -135,4 +139,19 @@ test("bounded adapter omits temperature, audits full evidence, and never retries
     fetchImpl: async () => { calls += 1; throw Object.assign(new Error("reset"), { code: "ECONNRESET" }); } }),
   (error) => error.category === "unknown-outcome" && error.retryable === false);
   assert.equal(calls, 1);
+});
+
+test("bounded broker passes credential and audit descriptors and preserves a pre-network auth audit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "m5e-bounded-broker-")); const credentialPath = join(root, "credential");
+  const auditPath = join(root, "audit.jsonl"); await writeFile(credentialPath, "\n", { mode: 0o600 });
+  const credential = await open(credentialPath, "r"); const audit = await open(auditPath, "wx", 0o600);
+  try {
+    const [task] = buildCandidateAdjudicationPlan([{ documentId: "d1", candidates: [candidate(1)] }]);
+    await assert.rejects(() => invokeM5EBoundedBrokerProcess({ credentialFd: credential.fd, auditFd: audit.fd,
+      request: { stage: "candidate-adjudication", task, modelId: "deepseek-v4-pro", maxOutputTokens: 4096, maximumAttempts: 1 } }),
+    (error) => error.category === "auth" && error.retryable === false);
+  } finally { await audit.close(); await credential.close(); }
+  const records = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(records.map((item) => item.event), ["request", "response"]);
+  await rm(root, { recursive: true, force: true });
 });

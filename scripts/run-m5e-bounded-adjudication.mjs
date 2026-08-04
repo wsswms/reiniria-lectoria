@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { openCredentialFile } from "../src/provider/credential-file.mjs";
-import { invokeM5CModelBroker } from "../src/m5c/model-broker-process.mjs";
 import { assembleDetectorV3Coverage } from "../src/m5e/detector-v3.mjs";
 import {
   buildLexicalStageABody,
@@ -32,6 +31,7 @@ import {
   normalizeGoalConsolidationPayload,
 } from "../src/m5e/lexical-bounded-adjudication.mjs";
 import { createDetectorV3Fixture } from "./m5e-detector-v3-fixture.mjs";
+import { invokeM5EBoundedBrokerProcess } from "./m5e-bounded-adjudication-broker-process.mjs";
 
 const mode = process.env.M5E_BOUNDED_ADJUDICATION_MODE;
 if (!new Set(["dry-run", "execute", "rebuild"]).has(mode)) throw new Error("Bounded adjudication mode is invalid");
@@ -223,9 +223,8 @@ async function executeAttempt(task, paths, credentialFd, ordinal, attempt) {
     thinking: "enabled", temperatureEffective: false, promptDigest: promptDigests[task.stage], requestBodyDigest: sha(body) };
   await writeFile(join(paths.calls, `${stem}.metadata.json`), `${JSON.stringify(metadata, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   const auditPath = join(paths.calls, `${stem}.jsonl`); const audit = await open(auditPath, "wx", 0o600); await chmod(auditPath, 0o600);
-  try { await invokeM5CModelBroker({ credentialFd, auditFd: audit.fd, request },
-    { entry: new URL("./m5e-bounded-adjudication-broker-entry.mjs", import.meta.url), timeoutMs: 900_000, outputBytes: 32 * 1024 * 1024 }); }
-  catch { /* the per-attempt audit is authoritative */ } finally { await audit.close(); }
+  try { await invokeM5EBoundedBrokerProcess({ credentialFd, auditFd: audit.fd, request }); }
+  catch (error) { if ((await audit.stat()).size === 0) throw error; } finally { await audit.close(); }
 }
 function eligible(tasks, state, attemptedInProcess) {
   const status = new Map(state.logical.map((item) => [item.taskId, item]));
@@ -334,8 +333,10 @@ try {
         unknownUsageCalls: totals.unknownUsageCalls, pendingCalls: wave.length }) > BOUNDED_ADJUDICATION_MAX_COST_MICROS_CNY) wave = wave.slice(0, -1);
       if (wave.length === 0) { status = "budget-stopped"; await writeReports(paths, source, benchmark, allTasks, records, aggregate, metrics, status); break; }
       const ordinal = records.length + 1;
-      await Promise.allSettled(wave.map((task, index) => executeAttempt(task, paths, credential.fd, ordinal + index,
+      const settled = await Promise.allSettled(wave.map((task, index) => executeAttempt(task, paths, credential.fd, ordinal + index,
         (state.attemptsByTask.get(task.taskId)?.length ?? 0) + 1)));
+      const localFailure = settled.find((item) => item.status === "rejected");
+      if (localFailure) throw new Error(`Bounded broker pre-request failure: ${localFailure.reason?.providerCode ?? "provider"} ${localFailure.reason?.localDiagnostic ?? ""}`.trim());
       wave.forEach((task) => attemptedInProcess.add(task.taskId));
       const progressRecords = await readAttemptRecords(paths, allTasks);
       const report = await writeReports(paths, source, benchmark, allTasks, progressRecords, aggregate, metrics, "running");
