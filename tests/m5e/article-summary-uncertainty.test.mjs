@@ -75,6 +75,8 @@ test("source-only summary permits Japanese domain context but forbids target-lan
   assert.match(body.messages[0].content, /中国語その他の言語への翻訳、日中対訳、訳語候補、翻訳助言、用語集を絶対に書かない/);
   const valid = "1990年代の写真用交換レンズ開発を題材に、低価格な限定製品の企画、光学設計、試作、商品化の経緯と、作例による描写評価を開発担当者の回想に沿って紹介する記事。";
   assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task, "source-only-v4").promptVariant, "source-only-v4");
+  assert.equal(normalizeArticleSummaryPayload({ articleSummary: "日".repeat(265) }, task, "source-only-v4").articleSummary.length, 265);
+  assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: "日".repeat(301) }, task, "source-only-v4"), /length/);
 });
 
 test("paired translation bodies differ only by explicit non-authoritative article context", () => {

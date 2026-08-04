@@ -146,7 +146,7 @@ export function normalizeArticleSummaryPayload(input, task, promptVariant = "tar
     throw new TypeError("article summary payload is invalid");
   }
   if (!SUMMARY_VARIANTS.includes(promptVariant)) throw new TypeError("article summary prompt variant is invalid");
-  const length = [...input.articleSummary].length; const [minimum, maximum] = promptVariant === "source-only-v4" ? [60, 220]
+  const length = [...input.articleSummary].length; const [minimum, maximum] = promptVariant === "source-only-v4" ? [60, 300]
     : promptVariant === "abstract-source-v3" ? [40, 120]
     : promptVariant === "source-language-v2" ? [60, 180] : [120, 400];
   if (length < minimum || length > maximum) throw new TypeError("article summary length is invalid");
