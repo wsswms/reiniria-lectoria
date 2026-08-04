@@ -6,6 +6,7 @@ import {
   TRANSLATION_UNCERTAIN_WORDS_SYSTEM_PROMPT,
   buildTranslationUncertainWordsBody,
   buildTranslationUncertainWordsFixture,
+  classifyTranslationUncertainWordsFailure,
   normalizeTranslationUncertainWordsPayload,
   scoreTranslationUncertainWords,
 } from "../../src/m5e/translation-uncertain-words.mjs";
@@ -40,6 +41,13 @@ test("translation uncertainty output requires complete drafts and exact bounded 
   assert.throws(() => normalizeTranslationUncertainWordsPayload({ segments: payload.segments.map((item, index) => index ? item : { ...item, uncertainWords: ["改写词"] }) }, task), /exact source substring/);
   assert.throws(() => normalizeTranslationUncertainWordsPayload({ segments: payload.segments.map((item, index) => index ? item : { ...item, draft: "" }) }, task), /segment is invalid/);
   assert.throws(() => normalizeTranslationUncertainWordsPayload({ segments: [...payload.segments].reverse() }, task), /segment is invalid/);
+});
+
+test("translation uncertainty classifies a billed HTTP 200 schema rejection as malformed instead of unknown", () => {
+  assert.equal(classifyTranslationUncertainWordsFailure(200), "malformed-response");
+  assert.equal(classifyTranslationUncertainWordsFailure(undefined), "unknown-outcome");
+  assert.equal(classifyTranslationUncertainWordsFailure(503), "provider");
+  assert.equal(classifyTranslationUncertainWordsFailure(200, "policy"), "policy");
 });
 
 test("translation uncertainty score reports each thinking arm and their exact occurrence overlap", () => {

@@ -14,12 +14,13 @@ import {
   TRANSLATION_UNCERTAIN_WORDS_VERSION,
   buildTranslationUncertainWordsBody,
   buildTranslationUncertainWordsFixture,
+  classifyTranslationUncertainWordsFailure,
   normalizeTranslationUncertainWordsPayload,
   scoreTranslationUncertainWords,
 } from "../src/m5e/translation-uncertain-words.mjs";
 
 const mode = process.env.M5E_TRANSLATION_UNCERTAIN_WORDS_MODE;
-if (!["dry-run", "execute", "rebuild"].includes(mode)) throw new Error("translation uncertain words mode is invalid");
+if (!["dry-run", "execute", "resume", "rebuild"].includes(mode)) throw new Error("translation uncertain words mode is invalid");
 const ORIGIN = "https://api.deepseek.com/chat/completions";
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const REFERENCE_DIGEST = "fe09844bed580c7e4609b869f95f5752ea761febf5fbe4196722f2c0e95935eb";
@@ -69,9 +70,7 @@ function request(body, credential, timeoutMs = 900_000) {
   });
 }
 function errorCategory(status, error) {
-  if (error) return error.category ?? "unknown-outcome";
-  if ([401, 403].includes(status)) return "auth"; if (status === 429) return "rate-limit";
-  if ([408, 504].includes(status)) return "timeout"; return status >= 500 ? "provider" : "policy";
+  return classifyTranslationUncertainWordsFailure(status, error?.category);
 }
 async function invoke(task, credential, auditPath) {
   const body = buildTranslationUncertainWordsBody(task); const audit = await open(auditPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
@@ -86,8 +85,10 @@ async function invoke(task, credential, auditPath) {
     const choice = outer?.choices?.[0];
     if (!outer || typeof outer.id !== "string" || !Array.isArray(outer.choices) || outer.choices.length !== 1 || choice.index !== 0
       || choice.finish_reason !== "stop" || typeof choice.message?.content !== "string") throw Object.assign(new Error("response envelope is malformed"), { category: "malformed-response" });
+    normalizedUsage = usage(outer.usage, Date.now() - started);
     let payload; try { payload = JSON.parse(choice.message.content); } catch { throw Object.assign(new Error("response payload JSON is malformed"), { category: "malformed-response" }); }
-    normalized = normalizeTranslationUncertainWordsPayload(payload, task); normalizedUsage = usage(outer.usage, Date.now() - started);
+    try { normalized = normalizeTranslationUncertainWordsPayload(payload, task); }
+    catch { throw Object.assign(new Error("response payload schema is malformed"), { category: "malformed-response" }); }
   } catch (error) { caught = error; }
   await append({ event: "response", completedAt: new Date().toISOString(), elapsedMs: Date.now() - started,
     response: response ? { status: response.status, headers: { "content-type": response.headers["content-type"] ?? null }, bodyBytes: response.bytes.length,
@@ -119,12 +120,18 @@ async function restored(paths, fixture) {
     const requestEvent = events.find((item) => item.event === "request"); const responseEvent = events.find((item) => item.event === "response");
     const task = fixture.tasks.find((item) => item.taskId === requestEvent?.taskId);
     if (!task || requestEvent.request?.url !== ORIGIN || requestEvent.request?.bodyDigest !== sha(buildTranslationUncertainWordsBody(task))) throw new Error("translation uncertain words request audit drifted");
-    let normalized = null;
-    if (responseEvent?.outcome?.normalized) {
-      const outer = JSON.parse(responseEvent.response.rawBody); normalized = normalizeTranslationUncertainWordsPayload(JSON.parse(outer.choices[0].message.content), task);
+    let normalized = null; let normalizedUsage = responseEvent?.usage ?? null; let status = "unknown-outcome";
+    if (responseEvent?.response?.rawBody) {
+      try {
+        const outer = JSON.parse(responseEvent.response.rawBody);
+        if (responseEvent.response.status === 200) {
+          normalizedUsage = usage(outer.usage, responseEvent.elapsedMs ?? 0);
+          normalized = normalizeTranslationUncertainWordsPayload(JSON.parse(outer.choices[0].message.content), task); status = "completed";
+        } else status = errorCategory(responseEvent.response.status);
+      } catch { status = "malformed-response"; }
     }
-    records.push(Object.freeze({ taskId: task.taskId, thinking: task.thinking, normalized, usage: responseEvent?.usage ?? null,
-      status: responseEvent?.outcome?.normalized ? "completed" : responseEvent ? responseEvent.outcome.category : "unknown-outcome", auditFile: name }));
+    records.push(Object.freeze({ taskId: task.taskId, thinking: task.thinking, normalized, usage: normalizedUsage,
+      status, auditFile: name }));
   }
   return records;
 }
@@ -159,20 +166,23 @@ try {
     if (mode === "execute") await mkdir(root, { mode: 0o700 });
     const paths = { root: await privateDirectory(root), calls: await privateDirectory(join(root, "llm-calls"), mode === "execute") };
     let records = await restored(paths, source.fixture); let status = "rebuilt";
-    if (mode === "execute") {
-      if (records.length !== 0) throw new Error("translation uncertain words execute requires an empty audit root");
+    if (["execute", "resume"].includes(mode)) {
+      if (mode === "execute" && records.length !== 0) throw new Error("translation uncertain words execute requires an empty audit root");
+      if (mode === "resume" && records.length === 0) throw new Error("translation uncertain words resume requires existing audit evidence");
       credential = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE); const secret = (await credential.readFile({ encoding: "utf8" })).trim();
       if (!secret || /\s/u.test(secret)) throw new Error("translation uncertain words credential is invalid");
-      status = "completed";
-      for (let offset = 0; offset < source.fixture.tasks.length; offset += TRANSLATION_UNCERTAIN_WORDS_MAX_CONCURRENCY) {
-        const wave = source.fixture.tasks.slice(offset, offset + TRANSLATION_UNCERTAIN_WORDS_MAX_CONCURRENCY); const aggregate = totals(records);
+      status = "completed"; let knownFailure = records.some((item) => item.status !== "completed");
+      const remaining = source.fixture.tasks.filter((task) => !records.some((record) => record.taskId === task.taskId));
+      for (let offset = 0; offset < remaining.length; offset += TRANSLATION_UNCERTAIN_WORDS_MAX_CONCURRENCY) {
+        const wave = remaining.slice(offset, offset + TRANSLATION_UNCERTAIN_WORDS_MAX_CONCURRENCY); const aggregate = totals(records);
         if (aggregate.costMicrosCny + aggregate.unknownUsageCalls * TRANSLATION_UNCERTAIN_WORDS_PENDING_RESERVATION_MICROS_CNY
           + wave.length * TRANSLATION_UNCERTAIN_WORDS_PENDING_RESERVATION_MICROS_CNY > TRANSLATION_UNCERTAIN_WORDS_MAX_COST_MICROS_CNY) { status = "budget-stopped"; break; }
         const settled = await Promise.allSettled(wave.map((task) => invoke(task, secret, join(paths.calls, `${task.taskId}.jsonl`))));
         records = await restored(paths, source.fixture);
         if (settled.some((item) => item.status === "rejected" && item.reason?.category === "unknown-outcome")) { status = "unknown-stopped"; break; }
-        if (settled.some((item) => item.status === "rejected")) { status = "failed-stopped"; break; }
+        if (settled.some((item) => item.status === "rejected")) knownFailure = true;
       }
+      if (status === "completed" && knownFailure) status = "evidence-complete-with-failure";
     }
     const report = await writeReport(paths, source, records, status); process.stdout.write(`${JSON.stringify({ status: report.status,
       completedLogical: report.logical.filter((item) => item.status === "completed").length, totals: report.totals,

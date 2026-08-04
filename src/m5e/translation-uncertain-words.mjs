@@ -117,6 +117,14 @@ export function normalizeTranslationUncertainWordsPayload(input, task) {
   return Object.freeze({ taskId: task.taskId, thinking: task.thinking, segments: Object.freeze(output) });
 }
 
+export function classifyTranslationUncertainWordsFailure(status, category) {
+  if (typeof category === "string" && category.length > 0) return category;
+  if (!Number.isInteger(status)) return "unknown-outcome";
+  if (status === 200) return "malformed-response";
+  if ([401, 403].includes(status)) return "auth"; if (status === 429) return "rate-limit";
+  if ([408, 504].includes(status)) return "timeout"; return status >= 500 ? "provider" : "policy";
+}
+
 function captures(result, anchor) {
   return result.segments.some((segment) => segment.segmentId === anchor.segmentId
     && segment.uncertainWords.some((word) => word.includes(anchor.surface)));
