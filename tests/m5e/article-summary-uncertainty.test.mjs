@@ -4,6 +4,7 @@ import {
   ARTICLE_SUMMARY_SYSTEM_PROMPT,
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS,
+  SOURCE_LANGUAGE_ARTICLE_SUMMARY_SYSTEM_PROMPT,
   buildArticleSummaryBody,
   buildArticleSummaryTranslationBody,
   buildArticleSummaryUncertaintyFixture,
@@ -42,6 +43,18 @@ test("summary prompt excludes terminology and translation advice and normalizer 
   assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task).articleSummary, valid);
   assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: "过短" }, task), /length/);
   assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: valid, terms: [] }, task), /payload/);
+});
+
+test("source-language summary stays Japanese and forbids translation, definition and romanization", () => {
+  const task = buildArticleSummaryUncertaintyFixture(corpus, proposal).summaryTasks[0];
+  const body = buildArticleSummaryBody(task, "source-language-v2");
+  assert.equal(body.messages[0].content, SOURCE_LANGUAGE_ARTICLE_SUMMARY_SYSTEM_PROMPT);
+  assert.match(body.messages[0].content, /日本語だけ/); assert.match(body.messages[0].content, /翻訳しない/);
+  assert.match(body.messages[0].content, /定義、解説、言い換え、正規化、ローマ字化、対訳化しない/);
+  const valid = "本記事は、写真用交換レンズの企画と開発を題材に、限られた条件のもとで進められた光学設計、試作、商品化の経緯と、開発担当者による作例評価を振り返る。";
+  const normalized = normalizeArticleSummaryPayload({ articleSummary: valid }, task, "source-language-v2");
+  assert.equal(normalized.promptVariant, "source-language-v2");
+  assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: "短すぎる" }, task, "source-language-v2"), /length/);
 });
 
 test("paired translation bodies differ only by explicit non-authoritative article context", () => {

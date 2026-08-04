@@ -21,7 +21,9 @@ import {
 } from "../src/m5e/article-summary-uncertainty.mjs";
 
 const mode = process.env.M5E_ARTICLE_SUMMARY_UNCERTAINTY_MODE;
-if (!["dry-run", "execute", "resume", "rebuild"].includes(mode)) throw new Error("article summary uncertainty mode is invalid");
+if (!["dry-run", "execute", "execute-summaries", "resume", "rebuild"].includes(mode)) throw new Error("article summary uncertainty mode is invalid");
+const promptVariant = process.env.M5E_ARTICLE_SUMMARY_UNCERTAINTY_VARIANT ?? "target-language-v1";
+if (!["target-language-v1", "source-language-v2"].includes(promptVariant)) throw new Error("article summary uncertainty variant is invalid");
 const ORIGIN = "https://api.deepseek.com/chat/completions";
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const REFERENCE_DIGEST = "fe09844bed580c7e4609b869f95f5752ea761febf5fbe4196722f2c0e95935eb";
@@ -76,11 +78,11 @@ function request(body, credential, timeoutMs = 900_000) {
 }
 const errorCategory = (status, error) => classifyTranslationUncertainWordsFailure(status, error?.category);
 function bodyFor(task, summaries) {
-  if (task.kind === "summary") return buildArticleSummaryBody(task);
-  return buildArticleSummaryTranslationBody(task, task.arm === "summary" ? summaries.get(task.articleRef) : undefined);
+  if (task.kind === "summary") return buildArticleSummaryBody(task, promptVariant);
+  return buildArticleSummaryTranslationBody(task, task.arm === "summary" ? summaries.get(task.articleRef) : undefined, promptVariant);
 }
 function normalizeFor(payload, task) {
-  return task.kind === "summary" ? normalizeArticleSummaryPayload(payload, task) : normalizeArticleSummaryTranslationPayload(payload, task);
+  return task.kind === "summary" ? normalizeArticleSummaryPayload(payload, task, promptVariant) : normalizeArticleSummaryTranslationPayload(payload, task);
 }
 async function invoke(task, summaries, credential, auditPath) {
   const body = bodyFor(task, summaries); const audit = await open(auditPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
@@ -165,7 +167,7 @@ async function writeReport(paths, source, records, status) {
     maximumLogicalCalls: ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS, maximumConcurrency: ARTICLE_SUMMARY_UNCERTAINTY_MAX_CONCURRENCY,
     maximumCostMicrosCny: ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
     pendingReservationMicrosCny: ARTICLE_SUMMARY_UNCERTAINTY_PENDING_RESERVATION_MICROS_CNY,
-    automaticRetries: 0, unknownRetry: false, temperatureSent: false,
+    promptVariant, automaticRetries: 0, unknownRetry: false, temperatureSent: false,
     logical: source.fixture.tasks.map((task) => ({ taskId: task.taskId, kind: task.kind, arm: task.arm ?? null,
       status: records.find((item) => item.taskId === task.taskId)?.status ?? "not-started" })), totals: aggregate,
     budgetExposureMicrosCny: aggregate.costMicrosCny + aggregate.unknownUsageCalls * ARTICLE_SUMMARY_UNCERTAINTY_PENDING_RESERVATION_MICROS_CNY,
@@ -192,24 +194,25 @@ try {
       logicalCalls: source.fixture.tasks.length, maximumConcurrency: ARTICLE_SUMMARY_UNCERTAINTY_MAX_CONCURRENCY,
       maximumCostMicrosCny: ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
       pendingReservationMicrosCny: ARTICLE_SUMMARY_UNCERTAINTY_PENDING_RESERVATION_MICROS_CNY,
-      temperatureSent: false, automaticRetries: 0, unknownRetry: false, credentialRead: false, directHttps: true,
+      promptVariant, temperatureSent: false, automaticRetries: 0, unknownRetry: false, credentialRead: false, directHttps: true,
       searchCalls: 0, fetchCalls: 0, researchCalls: 0, retranslationCalls: 0, qaCalls: 0, persistenceWrites: 0 })}\n`);
   } else {
     const root = process.env.M5E_ARTICLE_SUMMARY_UNCERTAINTY_OUTPUT_DIR;
-    if (mode === "execute") await mkdir(root, { mode: 0o700 });
-    const paths = { root: await privateDirectory(root), calls: await privateDirectory(join(root, "llm-calls"), mode === "execute") };
+    if (["execute", "execute-summaries"].includes(mode)) await mkdir(root, { mode: 0o700 });
+    const paths = { root: await privateDirectory(root), calls: await privateDirectory(join(root, "llm-calls"), ["execute", "execute-summaries"].includes(mode)) };
     let records = await restored(paths, source.fixture); let status = mode === "rebuild"
       ? records.some((item) => item.status === "unknown-outcome") ? "unknown-stopped"
         : records.length === source.fixture.tasks.length ? records.every((item) => item.status === "completed") ? "completed" : "evidence-complete-with-failure"
           : "evidence-partial" : "completed";
-    if (["execute", "resume"].includes(mode)) {
-      if (mode === "execute" && records.length !== 0) throw new Error("article summary uncertainty execute requires an empty audit root");
+    if (["execute", "execute-summaries", "resume"].includes(mode)) {
+      if (["execute", "execute-summaries"].includes(mode) && records.length !== 0) throw new Error("article summary uncertainty execute requires an empty audit root");
       if (mode === "resume" && records.length === 0) throw new Error("article summary uncertainty resume requires existing audit evidence");
       credential = await openCredentialFile(process.env.DEEPSEEK_KEY_FILE); const secret = (await credential.readFile({ encoding: "utf8" })).trim();
       if (!secret || /\s/u.test(secret)) throw new Error("article summary uncertainty credential is invalid");
       status = "completed"; let knownFailure = records.some((item) => item.status !== "completed");
-      for (const stage of [source.fixture.summaryTasks, source.fixture.translationTasks.filter((item) => item.arm === "control"),
-        source.fixture.translationTasks.filter((item) => item.arm === "summary")]) {
+      const stages = mode === "execute-summaries" ? [source.fixture.summaryTasks] : [source.fixture.summaryTasks,
+        source.fixture.translationTasks.filter((item) => item.arm === "control"), source.fixture.translationTasks.filter((item) => item.arm === "summary")];
+      for (const stage of stages) {
         const summaries = summaryMap(records);
         if (stage.some((task) => task.arm === "summary") && summaries.size !== source.fixture.summaryTasks.length) { knownFailure = true; break; }
         const remaining = stage.filter((task) => !records.some((record) => record.taskId === task.taskId));
@@ -226,7 +229,8 @@ try {
         }
         if (["budget-stopped", "unknown-stopped"].includes(status)) break;
       }
-      if (status === "completed" && (knownFailure || records.length !== source.fixture.tasks.length)) status = "evidence-complete-with-failure";
+      if (mode === "execute-summaries" && status === "completed" && records.length === source.fixture.summaryTasks.length && !knownFailure) status = "summary-review-checkpoint";
+      else if (status === "completed" && (knownFailure || records.length !== source.fixture.tasks.length)) status = "evidence-complete-with-failure";
     }
     const report = await writeReport(paths, source, records, status); process.stdout.write(`${JSON.stringify({ status: report.status,
       completedLogical: report.logical.filter((item) => item.status === "completed").length, totals: report.totals,
