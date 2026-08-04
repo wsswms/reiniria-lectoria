@@ -1,0 +1,67 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  ARTICLE_SUMMARY_SYSTEM_PROMPT,
+  ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
+  ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS,
+  buildArticleSummaryBody,
+  buildArticleSummaryTranslationBody,
+  buildArticleSummaryUncertaintyFixture,
+  normalizeArticleSummaryPayload,
+  normalizeArticleSummaryTranslationPayload,
+  scoreArticleSummaryUncertainty,
+} from "../../src/m5e/article-summary-uncertainty.mjs";
+
+const documents = [6, 10].map((count, documentIndex) => ({ segments: Array.from({ length: count }, (_, index) => {
+  const global = documentIndex === 0 ? index : index + 6;
+  return { segmentId: `segment-${global}`, ja: `本文${global}「専門語${global}」` };
+}) }));
+const corpus = { documents };
+const proposal = { status: "pending-user-confirmation", proposedFamilies: [
+  ...Array.from({ length: 16 }, (_, index) => ({ familyId: `family-${index}`, kind: "term", impact: "critical",
+    segmentIds: [`segment-${index}`], description: `「専門語${index}」の訳` })),
+  ...Array.from({ length: 3 }, (_, index) => ({ familyId: `family-extra-${index}`, kind: "entity", impact: "critical",
+    segmentIds: [`segment-${index}`], description: `「専門語${index}」の名称` })),
+] };
+
+test("article summary experiment freezes two summaries and five paired article-bounded packets", () => {
+  const fixture = buildArticleSummaryUncertaintyFixture(corpus, proposal);
+  assert.equal(fixture.tasks.length, ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS); assert.equal(fixture.summaryTasks.length, 2);
+  assert.equal(fixture.translationTasks.length, 10); assert.equal(ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY, 2_000_000);
+  assert.deepEqual(fixture.packets.map((item) => item.segments.length), [2, 4, 2, 4, 4]);
+  assert.equal(fixture.packets.every((packet) => packet.segments.every((segment) =>
+    documents[packet.articleIndex].segments.some((item) => item.segmentId === segment.segmentId))), true);
+  assert.deepEqual(fixture.translationTasks.map((item) => item.arm), [...Array(5).fill("control"), ...Array(5).fill("summary")]);
+});
+
+test("summary prompt excludes terminology and translation advice and normalizer bounds length", () => {
+  const task = buildArticleSummaryUncertaintyFixture(corpus, proposal).summaryTasks[0]; const body = buildArticleSummaryBody(task);
+  assert.deepEqual(body.thinking, { type: "disabled" }); assert.equal(body.temperature, undefined);
+  assert.match(ARTICLE_SUMMARY_SYSTEM_PROMPT, /Do not list uncertain terms/); assert.match(ARTICLE_SUMMARY_SYSTEM_PROMPT, /Japanese-to-Chinese term pairs/);
+  const valid = "这是一篇围绕摄影器材历史与光学设计展开的文章，作者结合产品开发背景和实际拍摄用途，回顾若干特殊镜头的构思过程、功能定位与设计取舍。内容涉及镜头结构、成像表现、市场语境以及命名趣闻，并通过叙述研发中的限制和尝试，说明不同方案如何回应具体摄影需求以及当时的产品环境。";
+  assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task).articleSummary, valid);
+  assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: "过短" }, task), /length/);
+  assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: valid, terms: [] }, task), /payload/);
+});
+
+test("paired translation bodies differ only by explicit non-authoritative article context", () => {
+  const fixture = buildArticleSummaryUncertaintyFixture(corpus, proposal); const control = fixture.translationTasks[0]; const enhanced = fixture.translationTasks[5];
+  const summary = { articleRef: enhanced.articleRef, articleSummary: "领域摘要" };
+  const controlBody = buildArticleSummaryTranslationBody(control); const enhancedBody = buildArticleSummaryTranslationBody(enhanced, summary);
+  assert.deepEqual(controlBody.thinking, { type: "enabled" }); assert.equal(controlBody.temperature, undefined);
+  const controlUser = JSON.parse(controlBody.messages[1].content); const enhancedUser = JSON.parse(enhancedBody.messages[1].content);
+  assert.equal(controlUser.articleContext, undefined); assert.equal(enhancedUser.articleContext.articleSummary, "领域摘要");
+  assert.match(enhancedUser.articleContext.instruction, /may omit details or be wrong/);
+});
+
+test("paired score reports added and lost critical families and exact occurrence overlap", () => {
+  const fixture = buildArticleSummaryUncertaintyFixture(corpus, proposal);
+  const results = fixture.translationTasks.map((task) => normalizeArticleSummaryTranslationPayload({ segments: task.segments.map((segment, index) => ({
+    ref: segment.ref, draft: `译文${index}`, uncertainWords: task.arm === "summary" || Number(segment.segmentId.split("-")[1]) < 8
+      ? [segment.sourceText.match(/専門語\d+/u)[0]] : [],
+  })) }, task));
+  const score = scoreArticleSummaryUncertainty(fixture, results);
+  assert.equal(score.arms.control.coveredCriticalFamilies, 11); assert.equal(score.arms.summary.coveredCriticalFamilies, 19);
+  assert.equal(score.deltaCriticalFamilies, 8); assert.equal(score.newlyCoveredFamilyIds.length, 8); assert.equal(score.lostFamilyIds.length, 0);
+  assert.equal(score.repeatConfirmationSuggested, true);
+});
