@@ -37,6 +37,9 @@ function configuration(modelId, maxOutputTokens, name) {
     throw new TypeError(`${name} configuration is invalid`);
   }
 }
+function providerBody(value, omitTemperature) {
+  return Object.freeze(omitTemperature ? value : { ...value, temperature: 1 });
+}
 
 export const LEXICAL_STAGE_A_SYSTEM_PROMPT = [
   "You extract only source-language lexical candidates whose accurate target-language rendering may require terminology research.",
@@ -58,13 +61,13 @@ export function buildLexicalStageAModelInput(coverageInput) {
     }))) });
 }
 
-export function buildLexicalStageABody({ coverage, modelId, maxOutputTokens }) {
+export function buildLexicalStageABody({ coverage, modelId, maxOutputTokens, omitTemperature = false }) {
   configuration(modelId, maxOutputTokens, "lexical Stage A");
-  return Object.freeze({ model: modelId, messages: Object.freeze([
+  return providerBody({ model: modelId, messages: Object.freeze([
     Object.freeze({ role: "system", content: LEXICAL_STAGE_A_SYSTEM_PROMPT }),
     Object.freeze({ role: "user", content: JSON.stringify(buildLexicalStageAModelInput(coverage)) }),
-  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }), temperature: 1,
-  max_tokens: maxOutputTokens, stream: false });
+  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }),
+  max_tokens: maxOutputTokens, stream: false }, omitTemperature);
 }
 
 function validateApprovedTerms(values, coverage) {
@@ -218,13 +221,13 @@ export function buildLexicalStageBModelInput(stageAInput) {
       quotes: Object.freeze(candidate.quotes.map((item) => item.text)), contexts: candidate.contexts }))) });
 }
 
-export function buildLexicalStageBBody({ stageAResult, modelId, maxOutputTokens }) {
+export function buildLexicalStageBBody({ stageAResult, modelId, maxOutputTokens, omitTemperature = false }) {
   configuration(modelId, maxOutputTokens, "lexical Stage B");
-  return Object.freeze({ model: modelId, messages: Object.freeze([
+  return providerBody({ model: modelId, messages: Object.freeze([
     Object.freeze({ role: "system", content: LEXICAL_STAGE_B_SYSTEM_PROMPT }),
     Object.freeze({ role: "user", content: JSON.stringify(buildLexicalStageBModelInput(stageAResult)) }),
-  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }), temperature: 1,
-  max_tokens: maxOutputTokens, stream: false });
+  ]), response_format: Object.freeze({ type: "json_object" }), thinking: Object.freeze({ type: "enabled" }),
+  max_tokens: maxOutputTokens, stream: false }, omitTemperature);
 }
 
 export function normalizeLexicalStageBPayload(input, stageAInput) {

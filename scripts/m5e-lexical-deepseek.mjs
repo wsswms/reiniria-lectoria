@@ -64,7 +64,7 @@ async function invoke(input, { credential, fetchImpl, audit, signal }, { stage, 
   const role = `planner-lexical-stage-${stage.toLowerCase()}`; const started = Date.now(); const startedAt = new Date(started).toISOString();
   let response; let rawText = null; let raw = null; let observedUsage = null; let normalized; let caught;
   audit?.(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "request", provider: "deepseek", role,
-    thinking: "enabled", temperature: 1, attempt: 1, maximumAttempts: 1, startedAt,
+    thinking: "enabled", temperature: body.temperature ?? null, temperatureEffective: false, attempt: 1, maximumAttempts: 1, startedAt,
     request: Object.freeze({ url: ORIGIN, method: "POST", headers: Object.freeze({ "content-type": "application/json" }), body,
       bodyBytes: Buffer.byteLength(JSON.stringify(body)) }) }));
   try {
@@ -89,7 +89,7 @@ async function invoke(input, { credential, fetchImpl, audit, signal }, { stage, 
   finally {
     const completed = Date.now(); const choice = raw?.choices?.[0];
     audit?.(Object.freeze({ schemaVersion: "reiniria-llm-call-audit-v1", event: "response", provider: "deepseek", role,
-      thinking: "enabled", temperature: 1, attempt: 1, maximumAttempts: 1, startedAt,
+      thinking: "enabled", temperature: body.temperature ?? null, temperatureEffective: false, attempt: 1, maximumAttempts: 1, startedAt,
       completedAt: new Date(completed).toISOString(), elapsedMs: completed - started,
       response: response ? Object.freeze({ status: response.status, headers: responseHeaders(response.headers),
         bodyBytes: rawText === null ? null : Buffer.byteLength(rawText), rawBody: rawText,

@@ -42,6 +42,8 @@ test("lexical Stage A sends only article text and a minimal quote-only JSON cont
   const body = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-flash", maxOutputTokens: 8_192 });
   assert.deepEqual(body.thinking, { type: "enabled" });
   assert.equal(body.temperature, 1);
+  const pro = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192, omitTemperature: true });
+  assert.equal(Object.hasOwn(pro, "temperature"), false);
   assert.equal(body.response_format.type, "json_object");
   assert.match(body.messages[0].content, /titleContext is context only/u);
   assert.match(body.messages[0].content, /\{"items":\[\{"quotes":\["軸上色収差"\]\}\]\}/u);

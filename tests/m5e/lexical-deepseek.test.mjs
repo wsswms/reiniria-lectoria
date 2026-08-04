@@ -84,6 +84,17 @@ test("Lexical Stage B adapter accepts only one attempt and never retries malform
     maxOutputTokens: 65_537, maximumAttempts: 1 }, { credential: "fixture-key" }), /configuration is invalid/);
 });
 
+test("Lexical Pro request omits ineffective temperature while retaining thinking and audit semantics", async () => {
+  const events = []; let body;
+  await invokeM5ELexicalStageADeepSeek({ coverage, approvedTerms, modelId: "deepseek-v4-pro", omitTemperature: true,
+    maxOutputTokens: 4096, maximumAttempts: 1 }, { credential: "fixture-key", audit: (event) => events.push(event),
+    fetchImpl: async (_url, request) => { body = JSON.parse(request.body);
+      return response(JSON.stringify({ items: [{ quotes: ["球面収差"] }] })); } });
+  assert.equal(Object.hasOwn(body, "temperature"), false); assert.deepEqual(body.thinking, { type: "enabled" });
+  assert.equal(events[0].temperature, null); assert.equal(events[0].temperatureEffective, false);
+  assert.equal(events[1].temperature, null); assert.equal(events[1].temperatureEffective, false);
+});
+
 test("Lexical adapters fail closed on strict usage and classify response-body failures as unknown", async () => {
   await assert.rejects(() => invokeM5ELexicalStageADeepSeek({ coverage, approvedTerms, modelId: "deepseek-v4-flash",
     maxOutputTokens: 4096, maximumAttempts: 1 }, { credential: "fixture-key", fetchImpl: async () => response("{}", {
