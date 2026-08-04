@@ -165,7 +165,12 @@ try {
     const root = process.env.M5E_TRANSLATION_UNCERTAIN_WORDS_OUTPUT_DIR;
     if (mode === "execute") await mkdir(root, { mode: 0o700 });
     const paths = { root: await privateDirectory(root), calls: await privateDirectory(join(root, "llm-calls"), mode === "execute") };
-    let records = await restored(paths, source.fixture); let status = "rebuilt";
+    let records = await restored(paths, source.fixture); let status = mode === "rebuild"
+      ? records.some((item) => item.status === "unknown-outcome") ? "unknown-stopped"
+        : records.length === source.fixture.tasks.length
+          ? records.every((item) => item.status === "completed") ? "completed" : "evidence-complete-with-failure"
+          : "evidence-partial"
+      : "completed";
     if (["execute", "resume"].includes(mode)) {
       if (mode === "execute" && records.length !== 0) throw new Error("translation uncertain words execute requires an empty audit root");
       if (mode === "resume" && records.length === 0) throw new Error("translation uncertain words resume requires existing audit evidence");
