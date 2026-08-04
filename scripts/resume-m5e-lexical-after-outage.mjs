@@ -92,7 +92,7 @@ function stageBSummary(result, stageAResult, benchmark) {
 }
 function expectedRequest(task, coverages, successful) {
   if (task.stage === "stage-a") return Object.freeze({ stage: "stage-a", coverage: coverages[task.documentIndex],
-    approvedTerms: coverages.approvedTerms, modelId: LEXICAL_EXPERIMENT_MODEL,
+    approvedTerms: coverages.approvedTerms, modelId: LEXICAL_EXPERIMENT_MODEL, stageAPromptVersion: "recall-v1",
     maxOutputTokens: LEXICAL_EXPERIMENT_MAX_OUTPUT_TOKENS, maximumAttempts: 1 });
   const values = task.dependencyTaskIds.map((taskId) => successful.get(taskId));
   if (values.some((value) => !value)) return null;

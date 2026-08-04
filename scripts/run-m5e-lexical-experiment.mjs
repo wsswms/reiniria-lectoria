@@ -75,7 +75,7 @@ function stageAResultFor(task, successful) {
 }
 function expectedRequest(task, coverages, fixture, successful) {
   if (task.stage === "stage-a") return Object.freeze({ stage: "stage-a", coverage: coverages[task.documentIndex],
-    approvedTerms: fixture.approvedTerms, modelId: LEXICAL_EXPERIMENT_MODEL,
+    approvedTerms: fixture.approvedTerms, modelId: LEXICAL_EXPERIMENT_MODEL, stageAPromptVersion: "recall-v1",
     maxOutputTokens: LEXICAL_EXPERIMENT_MAX_OUTPUT_TOKENS, maximumAttempts: 1 });
   const stageAResult = stageAResultFor(task, successful); if (!stageAResult) return null;
   return Object.freeze({ stage: "stage-b", stageAResult, modelId: LEXICAL_EXPERIMENT_MODEL,
@@ -188,7 +188,7 @@ try {
     process.env.M5E_LEXICAL_REFERENCE_PROPOSAL_DIGEST); const benchmark = buildLexicalReferenceBenchmark(reference.value, fixture.documents);
   if (mode === "dry-run") {
     const stageAMetrics = coverages.map((coverage) => { const body = buildLexicalStageABody({ coverage, modelId: LEXICAL_EXPERIMENT_MODEL,
-      maxOutputTokens: LEXICAL_EXPERIMENT_MAX_OUTPUT_TOKENS }); return Object.freeze({ documentId: coverage.document.documentId,
+      maxOutputTokens: LEXICAL_EXPERIMENT_MAX_OUTPUT_TOKENS, stageAPromptVersion: "recall-v1" }); return Object.freeze({ documentId: coverage.document.documentId,
       systemCharacters: body.messages[0].content.length, userCharacters: body.messages[1].content.length, bodyDigest: sha(body) }); });
     process.stdout.write(`${JSON.stringify({ schemaVersion: `${LEXICAL_EXPERIMENT_VERSION}-preflight`, status: "ready",
       corpusDigest: fixture.corpusDigest, factSetDigest: fixture.manifest.factSetDigest, referenceFileDigest: reference.fileDigest,

@@ -7,20 +7,31 @@ import { assembleDetectorV3Coverage } from "../src/m5e/detector-v3.mjs";
 import {
   buildLexicalStageABody,
   buildLexicalStageBBody,
+  LEXICAL_STAGE_A_SYSTEM_PROMPT_V1,
+  LEXICAL_STAGE_A_SYSTEM_PROMPT_V2,
   normalizeLexicalStageAPayload,
   normalizeLexicalStageBPayload,
 } from "../src/m5e/lexical-two-stage.mjs";
 import { buildLexicalReferenceBenchmark, scoreLexicalReferenceBenchmark } from "../src/m5e/lexical-reference-benchmark.mjs";
 import { classifyLexicalAuditEvents } from "../src/m5e/lexical-experiment-recovery.mjs";
+import {
+  LEXICAL_STAGE_A_V2_MAX_ATTEMPTS,
+  LEXICAL_STAGE_A_V2_MAX_CONCURRENCY,
+  LEXICAL_STAGE_A_V2_MAX_COST_MICROS_CNY,
+  lexicalStageAV2Plan,
+} from "../src/m5e/lexical-stage-a-v2-experiment.mjs";
 import { createDetectorV3Fixture } from "./m5e-detector-v3-fixture.mjs";
 
-const VERSION = "m5e-lexical-pro-gate-v1";
+const variant = process.env.M5E_LEXICAL_PRO_GATE_VARIANT ?? "gate-v1";
+if (!["gate-v1", "stage-a-v2"].includes(variant)) throw new Error("Lexical Pro gate variant is invalid");
+const stageAV2 = variant === "stage-a-v2";
+const VERSION = stageAV2 ? "m5e-lexical-stage-a-v2-experiment-v1" : "m5e-lexical-pro-gate-v1";
 const MODEL = "deepseek-v4-pro";
-const MAX_LOGICAL = 16;
-const MAX_ATTEMPTS = 30;
-const MAX_CONCURRENCY = 8;
+const MAX_LOGICAL = stageAV2 ? 8 : 16;
+const MAX_ATTEMPTS = stageAV2 ? LEXICAL_STAGE_A_V2_MAX_ATTEMPTS : 30;
+const MAX_CONCURRENCY = stageAV2 ? LEXICAL_STAGE_A_V2_MAX_CONCURRENCY : 8;
 const MAX_OUTPUT_TOKENS = 65_536;
-const MAX_COST_MICROS_CNY = 5_000_000;
+const MAX_COST_MICROS_CNY = stageAV2 ? LEXICAL_STAGE_A_V2_MAX_COST_MICROS_CNY : 5_000_000;
 const UNKNOWN_RESERVATION_MICROS_CNY = 500_000;
 const FX_CNY_PER_USD = 8;
 const PRICE_USD_PER_MILLION = Object.freeze({ cacheHitInput: 0.003625, cacheMissInput: 0.435, output: 0.87 });
@@ -30,6 +41,7 @@ if (!new Set(["dry-run", "execute", "rebuild"]).has(mode)) throw new Error("Lexi
 
 const sha = (value) => `sha256:${createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value)
   ? value : JSON.stringify(value)).digest("hex")}`;
+const STAGE_A_PROMPT_DIGEST = sha(stageAV2 ? LEXICAL_STAGE_A_SYSTEM_PROMPT_V2 : LEXICAL_STAGE_A_SYSTEM_PROMPT_V1);
 async function privateDirectory(path, create = false) {
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   const stat = await lstat(path);
@@ -53,6 +65,7 @@ function parseEvents(bytes) {
   const source = bytes.toString("utf8").trim(); return source.length === 0 ? [] : source.split("\n").map((line) => JSON.parse(line));
 }
 function plan(documents) {
+  if (stageAV2) return lexicalStageAV2Plan(documents);
   const tasks = [];
   for (let repeat = 1; repeat <= 2; repeat += 1) for (const [documentIndex, document] of documents.entries()) {
     tasks.push(Object.freeze({ taskId: `pro-a-d${documentIndex + 1}-r${repeat}`, stage: "stage-a", repeat, documentIndex,
@@ -68,6 +81,7 @@ function plan(documents) {
 function expectedRequest(task, coverages, successful) {
   if (task.stage === "stage-a") return Object.freeze({ stage: "stage-a", coverage: coverages[task.documentIndex],
     approvedTerms: coverages.approvedTerms, modelId: MODEL, omitTemperature: true,
+    stageAPromptVersion: stageAV2 ? "precision-v2" : "recall-v1",
     maxOutputTokens: MAX_OUTPUT_TOKENS, maximumAttempts: 1 });
   const stageAResult = successful.get(task.dependencyTaskIds[0]); if (!stageAResult) return null;
   return Object.freeze({ stage: "stage-b", stageAResult, modelId: MODEL, omitTemperature: true,
@@ -123,7 +137,10 @@ async function rebuild(tasks, paths, coverages, benchmark) {
   const records = [];
   for (const metadataName of names) {
     const metadata = JSON.parse((await privateFile(join(paths.calls, metadataName))).toString("utf8")); const task = taskById.get(metadata.taskId);
-    if (!task || metadata.modelId !== MODEL || metadata.temperatureEffective !== false) throw new Error("Lexical Pro gate metadata is invalid");
+    if (!task || metadata.modelId !== MODEL || metadata.temperatureEffective !== false
+      || (stageAV2 && (metadata.stageAPromptVersion !== "precision-v2" || metadata.stageAPromptDigest !== STAGE_A_PROMPT_DIGEST))) {
+      throw new Error("Lexical Pro gate metadata is invalid");
+    }
     const stem = metadataName.replace(/\.metadata\.json$/u, ""); const auditName = `${stem}.jsonl`;
     const auditBytes = await privateFile(join(paths.calls, auditName)); const events = parseEvents(auditBytes);
     const classification = classifyLexicalAuditEvents(events); const requestEvent = events.find((event) => event.event === "request");
@@ -163,6 +180,8 @@ async function executeAttempt(task, request, paths, credentialFd, ordinal, attem
   const stem = `${String(ordinal).padStart(4, "0")}-${task.taskId}-a${attempt}`; const auditPath = join(paths.calls, `${stem}.jsonl`);
   const body = expectedBody(request); const metadata = { schemaVersion: `${VERSION}-attempt`, ordinal, taskId: task.taskId, attempt,
     maximumAttempts: 2, modelId: MODEL, thinking: "enabled", temperatureEffective: false, requestBodyDigest: sha(body) };
+  if (task.stage === "stage-a") { metadata.stageAPromptVersion = request.stageAPromptVersion;
+    metadata.stageAPromptDigest = STAGE_A_PROMPT_DIGEST; }
   await writeFile(join(paths.calls, `${stem}.metadata.json`), `${JSON.stringify(metadata, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   const audit = await open(auditPath, "wx", 0o600); await chmod(auditPath, 0o600);
   try { await invokeM5CModelBroker({ credentialFd, auditFd: audit.fd, request },
@@ -174,6 +193,7 @@ async function writeReport(paths, fixture, benchmark, state, status) {
     factSetDigest: fixture.manifest.factSetDigest, benchmarkDigest: benchmark.benchmarkDigest, modelId: MODEL,
     logicalTasks: MAX_LOGICAL, maximumActualAttempts: MAX_ATTEMPTS, maximumConcurrency: MAX_CONCURRENCY,
     maximumCostMicrosCny: MAX_COST_MICROS_CNY, thinking: "enabled", temperatureSent: false, temperatureEffective: false,
+    stageAPromptVersion: stageAV2 ? "precision-v2" : "recall-v1", stageAPromptDigest: STAGE_A_PROMPT_DIGEST,
     priceSnapshot: { source: "https://api-docs.deepseek.com/quick_start/pricing", observedAt: "2026-08-04",
       currency: "USD", usdPerMillionTokens: PRICE_USD_PER_MILLION, conservativeFxCnyPerUsd: FX_CNY_PER_USD },
     logical: state.logical, attempts: state.attempts, totals: usage, budgetExposureMicrosCny: exposure(usage),
@@ -191,12 +211,15 @@ try {
   const benchmark = buildLexicalReferenceBenchmark(JSON.parse(referenceBytes.toString("utf8")), fixture.documents);
   if (mode === "dry-run") {
     process.stdout.write(`${JSON.stringify({ schemaVersion: `${VERSION}-preflight`, status: "ready", modelId: MODEL,
-      logicalTasks: tasks.length, stageA: 8, stageB: 8, maximumActualAttempts: MAX_ATTEMPTS, maximumConcurrency: MAX_CONCURRENCY,
+      logicalTasks: tasks.length, stageA: 8, stageB: stageAV2 ? 0 : 8,
+      stageAPromptVersion: stageAV2 ? "precision-v2" : "recall-v1", stageAPromptDigest: STAGE_A_PROMPT_DIGEST,
+      maximumActualAttempts: MAX_ATTEMPTS, maximumConcurrency: MAX_CONCURRENCY,
       maximumCostMicrosCny: MAX_COST_MICROS_CNY, thinking: "enabled", temperatureSent: false, temperatureEffective: false,
       maximumAttemptsPerLogicalTask: 2, retryableCategories: [...RETRYABLE], unknownRetry: false, credentialRead: false })}\n`);
   } else {
-    if (mode === "execute") await mkdir(process.env.M5E_LEXICAL_PRO_GATE_OUTPUT_DIR, { recursive: false, mode: 0o700 });
-    const root = await privateDirectory(process.env.M5E_LEXICAL_PRO_GATE_OUTPUT_DIR);
+    const outputDirectory = stageAV2 ? process.env.M5E_LEXICAL_STAGE_A_V2_OUTPUT_DIR : process.env.M5E_LEXICAL_PRO_GATE_OUTPUT_DIR;
+    if (mode === "execute") await mkdir(outputDirectory, { recursive: false, mode: 0o700 });
+    const root = await privateDirectory(outputDirectory);
     const paths = { root, calls: await privateDirectory(join(root, "llm-calls"), mode === "execute") };
     let state = await rebuild(tasks, paths, coverages, benchmark); let status = "completed";
     if (mode === "execute") {
