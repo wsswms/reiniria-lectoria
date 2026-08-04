@@ -7,9 +7,11 @@ import { assembleDetectorV3Coverage } from "../src/m5e/detector-v3.mjs";
 import {
   buildLexicalStageABody,
   buildLexicalStageBBody,
+  LEXICAL_STAGE_A_RISK_BALANCED_PROMPT_VERSION,
   LEXICAL_STAGE_A_SYSTEM_PROMPT_V1,
   LEXICAL_STAGE_A_SYSTEM_PROMPT_V2,
   LEXICAL_STAGE_A_SYSTEM_PROMPT_V3,
+  LEXICAL_STAGE_A_SYSTEM_PROMPT_V4,
   normalizeLexicalStageAPayload,
   normalizeLexicalStageBPayload,
 } from "../src/m5e/lexical-two-stage.mjs";
@@ -27,21 +29,32 @@ import {
   LEXICAL_STAGE_A_V3_MAX_COST_MICROS_CNY,
   lexicalStageAV3Plan,
 } from "../src/m5e/lexical-stage-a-v3-experiment.mjs";
+import {
+  LEXICAL_STAGE_A_V4_MAX_ATTEMPTS,
+  LEXICAL_STAGE_A_V4_MAX_CONCURRENCY,
+  LEXICAL_STAGE_A_V4_MAX_COST_MICROS_CNY,
+  lexicalStageAV4Plan,
+} from "../src/m5e/lexical-stage-a-v4-experiment.mjs";
 import { createDetectorV3Fixture } from "./m5e-detector-v3-fixture.mjs";
 
 const variant = process.env.M5E_LEXICAL_PRO_GATE_VARIANT ?? "gate-v1";
-if (!["gate-v1", "stage-a-v2", "stage-a-v3"].includes(variant)) throw new Error("Lexical Pro gate variant is invalid");
+if (!["gate-v1", "stage-a-v2", "stage-a-v3", "stage-a-v4"].includes(variant)) throw new Error("Lexical Pro gate variant is invalid");
 const stageAV2 = variant === "stage-a-v2";
 const stageAV3 = variant === "stage-a-v3";
-const stageAOnly = stageAV2 || stageAV3;
-const VERSION = stageAV3 ? "m5e-lexical-stage-a-v3-experiment-v1"
+const stageAV4 = variant === "stage-a-v4";
+const stageAOnly = stageAV2 || stageAV3 || stageAV4;
+const VERSION = stageAV4 ? "m5e-lexical-stage-a-v4-experiment-v1"
+  : stageAV3 ? "m5e-lexical-stage-a-v3-experiment-v1"
   : stageAV2 ? "m5e-lexical-stage-a-v2-experiment-v1" : "m5e-lexical-pro-gate-v1";
 const MODEL = "deepseek-v4-pro";
-const MAX_LOGICAL = stageAV3 ? 16 : stageAV2 ? 8 : 16;
-const MAX_ATTEMPTS = stageAV3 ? LEXICAL_STAGE_A_V3_MAX_ATTEMPTS : stageAV2 ? LEXICAL_STAGE_A_V2_MAX_ATTEMPTS : 30;
-const MAX_CONCURRENCY = stageAV3 ? LEXICAL_STAGE_A_V3_MAX_CONCURRENCY : stageAV2 ? LEXICAL_STAGE_A_V2_MAX_CONCURRENCY : 8;
+const MAX_LOGICAL = stageAV4 ? 16 : stageAV3 ? 16 : stageAV2 ? 8 : 16;
+const MAX_ATTEMPTS = stageAV4 ? LEXICAL_STAGE_A_V4_MAX_ATTEMPTS
+  : stageAV3 ? LEXICAL_STAGE_A_V3_MAX_ATTEMPTS : stageAV2 ? LEXICAL_STAGE_A_V2_MAX_ATTEMPTS : 30;
+const MAX_CONCURRENCY = stageAV4 ? LEXICAL_STAGE_A_V4_MAX_CONCURRENCY
+  : stageAV3 ? LEXICAL_STAGE_A_V3_MAX_CONCURRENCY : stageAV2 ? LEXICAL_STAGE_A_V2_MAX_CONCURRENCY : 8;
 const MAX_OUTPUT_TOKENS = 65_536;
-const MAX_COST_MICROS_CNY = stageAV3 ? LEXICAL_STAGE_A_V3_MAX_COST_MICROS_CNY
+const MAX_COST_MICROS_CNY = stageAV4 ? LEXICAL_STAGE_A_V4_MAX_COST_MICROS_CNY
+  : stageAV3 ? LEXICAL_STAGE_A_V3_MAX_COST_MICROS_CNY
   : stageAV2 ? LEXICAL_STAGE_A_V2_MAX_COST_MICROS_CNY : 5_000_000;
 const UNKNOWN_RESERVATION_MICROS_CNY = 500_000;
 const FX_CNY_PER_USD = 8;
@@ -52,8 +65,9 @@ if (!new Set(["dry-run", "execute", "rebuild"]).has(mode)) throw new Error("Lexi
 
 const sha = (value) => `sha256:${createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value)
   ? value : JSON.stringify(value)).digest("hex")}`;
-const STAGE_A_PROMPT_VERSION = stageAV3 ? "balanced-v3" : stageAV2 ? "precision-v2" : "recall-v1";
-const STAGE_A_PROMPT_DIGEST = sha(stageAV3 ? LEXICAL_STAGE_A_SYSTEM_PROMPT_V3
+const STAGE_A_PROMPT_VERSION = stageAV4 ? LEXICAL_STAGE_A_RISK_BALANCED_PROMPT_VERSION
+  : stageAV3 ? "balanced-v3" : stageAV2 ? "precision-v2" : "recall-v1";
+const STAGE_A_PROMPT_DIGEST = sha(stageAV4 ? LEXICAL_STAGE_A_SYSTEM_PROMPT_V4 : stageAV3 ? LEXICAL_STAGE_A_SYSTEM_PROMPT_V3
   : stageAV2 ? LEXICAL_STAGE_A_SYSTEM_PROMPT_V2 : LEXICAL_STAGE_A_SYSTEM_PROMPT_V1);
 async function privateDirectory(path, create = false) {
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
@@ -78,6 +92,7 @@ function parseEvents(bytes) {
   const source = bytes.toString("utf8").trim(); return source.length === 0 ? [] : source.split("\n").map((line) => JSON.parse(line));
 }
 function plan(documents) {
+  if (stageAV4) return lexicalStageAV4Plan(documents);
   if (stageAV3) return lexicalStageAV3Plan(documents);
   if (stageAV2) return lexicalStageAV2Plan(documents);
   const tasks = [];
@@ -131,7 +146,8 @@ function reconstruct(task, events, request, benchmark) {
   const response = events.find((event) => event.event === "response");
   if (!response || response.outcome?.normalized !== true || typeof response.response?.content !== "string") return null;
   const payload = JSON.parse(response.response.content);
-  const result = task.stage === "stage-a" ? normalizeLexicalStageAPayload(payload, request.coverage, request.approvedTerms)
+  const result = task.stage === "stage-a" ? normalizeLexicalStageAPayload(payload, request.coverage, request.approvedTerms,
+    { maximumItems: request.stageAPromptVersion === LEXICAL_STAGE_A_RISK_BALANCED_PROMPT_VERSION ? 72 : 96 })
     : normalizeLexicalStageBPayload(payload, request.stageAResult);
   if (task.stage === "stage-a") {
     const quotes = result.candidates.flatMap((candidate) => candidate.quotes); const occurrences = quotes.flatMap((quote) => quote.occurrences);
@@ -232,7 +248,8 @@ try {
       maximumCostMicrosCny: MAX_COST_MICROS_CNY, thinking: "enabled", temperatureSent: false, temperatureEffective: false,
       maximumAttemptsPerLogicalTask: 2, retryableCategories: [...RETRYABLE], unknownRetry: false, credentialRead: false })}\n`);
   } else {
-    const outputDirectory = stageAV3 ? process.env.M5E_LEXICAL_STAGE_A_V3_OUTPUT_DIR
+    const outputDirectory = stageAV4 ? process.env.M5E_LEXICAL_STAGE_A_V4_OUTPUT_DIR
+      : stageAV3 ? process.env.M5E_LEXICAL_STAGE_A_V3_OUTPUT_DIR
       : stageAV2 ? process.env.M5E_LEXICAL_STAGE_A_V2_OUTPUT_DIR : process.env.M5E_LEXICAL_PRO_GATE_OUTPUT_DIR;
     if (mode === "execute") await mkdir(outputDirectory, { recursive: false, mode: 0o700 });
     const root = await privateDirectory(outputDirectory);

@@ -2,6 +2,7 @@ import { auditError, responseHeaders } from "../src/provider/llm-call-audit.mjs"
 import {
   buildLexicalStageABody,
   buildLexicalStageBBody,
+  LEXICAL_STAGE_A_RISK_BALANCED_PROMPT_VERSION,
   normalizeLexicalStageAPayload,
   normalizeLexicalStageBPayload,
 } from "../src/m5e/lexical-two-stage.mjs";
@@ -105,7 +106,8 @@ async function invoke(input, { credential, fetchImpl, audit, signal }, { stage, 
 export function invokeM5ELexicalStageADeepSeek(input, { credential, fetchImpl = globalThis.fetch, audit, signal } = {}) {
   validate(input, fetchImpl, audit); const body = buildLexicalStageABody(input);
   return invoke(input, { credential, fetchImpl, audit, signal }, { stage: "A", body,
-    normalize: (payload) => normalizeLexicalStageAPayload(payload, input.coverage, input.approvedTerms ?? []) });
+    normalize: (payload) => normalizeLexicalStageAPayload(payload, input.coverage, input.approvedTerms ?? [],
+      { maximumItems: input.stageAPromptVersion === LEXICAL_STAGE_A_RISK_BALANCED_PROMPT_VERSION ? 72 : 96 }) });
 }
 
 export function invokeM5ELexicalStageBDeepSeek(input, { credential, fetchImpl = globalThis.fetch, audit, signal } = {}) {

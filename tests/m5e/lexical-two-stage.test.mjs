@@ -6,6 +6,7 @@ import {
   buildLexicalStageAModelInput,
   buildLexicalStageBBody,
   buildLexicalStageBModelInput,
+  LEXICAL_STAGE_A_SYSTEM_PROMPT_V4,
   mergeLexicalStageAResults,
   normalizeLexicalStageAPayload,
   normalizeLexicalStageBPayload,
@@ -63,6 +64,18 @@ test("lexical Stage A sends only article text and a minimal quote-only JSON cont
   assert.doesNotMatch(balanced.messages[0].content, /Precision is more important/u);
   assert.doesNotMatch(balanced.messages[0].content, /empty items array/u);
   assert.doesNotMatch(balanced.messages[0].content, /When unsure whether external research is necessary, omit/u);
+  const riskBalanced = buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
+    omitTemperature: true, stageAPromptVersion: "risk-balanced-v4" });
+  assert.ok(LEXICAL_STAGE_A_SYSTEM_PROMPT_V4.length <= 2_500);
+  assert.match(riskBalanced.messages[0].content, /concrete, identifiable translation or terminology risk/u);
+  assert.match(riskBalanced.messages[0].content, /distinguishes related domain concepts/u);
+  assert.match(riskBalanced.messages[0].content, /exactly one key, "items"/u);
+  assert.match(riskBalanced.messages[0].content, /longest semantically complete expression/u);
+  assert.match(riskBalanced.messages[0].content, /Return at most 72 items/u);
+  assert.doesNotMatch(riskBalanced.messages[0].content, /even if you know a plausible translation/u);
+  assert.doesNotMatch(riskBalanced.messages[0].content, /When uncertain.*include it/u);
+  assert.doesNotMatch(riskBalanced.messages[0].content, /competent general translation model/u);
+  assert.doesNotMatch(riskBalanced.messages[0].content, /Precision is more important/u);
   assert.throws(() => buildLexicalStageABody({ coverage, modelId: "deepseek-v4-pro", maxOutputTokens: 8_192,
     stageAPromptVersion: "unknown" }), /prompt version/u);
 });
@@ -112,6 +125,9 @@ test("lexical Stage A is strict, source anchored, stable across item order and d
   assert.throws(() => normalizeLexicalStageAPayload({ items: [{ quotes: [] }] }, coverage, approvedTerms), /quotes/u);
   assert.throws(() => normalizeLexicalStageAPayload({ items: [{ quotes: ["不存在"] }] }, coverage, approvedTerms), /exact quote/u);
   assert.throws(() => normalizeLexicalStageAPayload({ items: [{ quotes: ["球面収差"], extra: true }] }, coverage, approvedTerms), /invalid keys/u);
+  const repeated = Array.from({ length: 73 }, (_, index) => ({ quotes: [index % 2 === 0 ? "球面収差" : "完全重複"] }));
+  assert.throws(() => normalizeLexicalStageAPayload({ items: repeated }, coverage, approvedTerms,
+    { maximumItems: 72 }), /items/u);
 });
 
 test("lexical Stage B exposes short refs and bounded contexts only for uncovered candidates", () => {
