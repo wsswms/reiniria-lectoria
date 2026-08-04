@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ARTICLE_SUMMARY_SYSTEM_PROMPT,
+  ABSTRACT_SOURCE_ARTICLE_SUMMARY_SYSTEM_PROMPT,
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_COST_MICROS_CNY,
   ARTICLE_SUMMARY_UNCERTAINTY_MAX_TASKS,
   SOURCE_LANGUAGE_ARTICLE_SUMMARY_SYSTEM_PROMPT,
@@ -55,6 +56,15 @@ test("source-language summary stays Japanese and forbids translation, definition
   const normalized = normalizeArticleSummaryPayload({ articleSummary: valid }, task, "source-language-v2");
   assert.equal(normalized.promptVariant, "source-language-v2");
   assert.throws(() => normalizeArticleSummaryPayload({ articleSummary: "短すぎる" }, task, "source-language-v2"), /length/);
+});
+
+test("abstract source summary excludes product names, specifications and concrete terminology", () => {
+  const task = buildArticleSummaryUncertaintyFixture(corpus, proposal).summaryTasks[0];
+  const body = buildArticleSummaryBody(task, "abstract-source-v3");
+  assert.equal(body.messages[0].content, ABSTRACT_SOURCE_ARTICLE_SUMMARY_SYSTEM_PROMPT);
+  assert.match(body.messages[0].content, /製品名、固有名詞、引用符付き表現、型番、数値、仕様、具体的な光学形式、個別の専門用語を一切書かない/);
+  const valid = "過去の写真器材開発を題材に、企画から光学設計、試作、商品化へ至る経緯と、作例を用いた評価を開発担当者の回想に沿って紹介する記事。";
+  assert.equal(normalizeArticleSummaryPayload({ articleSummary: valid }, task, "abstract-source-v3").promptVariant, "abstract-source-v3");
 });
 
 test("paired translation bodies differ only by explicit non-authoritative article context", () => {

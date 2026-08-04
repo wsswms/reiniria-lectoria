@@ -23,7 +23,7 @@ import {
 const mode = process.env.M5E_ARTICLE_SUMMARY_UNCERTAINTY_MODE;
 if (!["dry-run", "execute", "execute-summaries", "resume", "rebuild"].includes(mode)) throw new Error("article summary uncertainty mode is invalid");
 const promptVariant = process.env.M5E_ARTICLE_SUMMARY_UNCERTAINTY_VARIANT ?? "target-language-v1";
-if (!["target-language-v1", "source-language-v2"].includes(promptVariant)) throw new Error("article summary uncertainty variant is invalid");
+if (!["target-language-v1", "source-language-v2", "abstract-source-v3"].includes(promptVariant)) throw new Error("article summary uncertainty variant is invalid");
 const ORIGIN = "https://api.deepseek.com/chat/completions";
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const REFERENCE_DIGEST = "fe09844bed580c7e4609b869f95f5752ea761febf5fbe4196722f2c0e95935eb";
