@@ -30,7 +30,7 @@ function success(requestValue, overrides = {}) {
     responseId: "gemini-response-fixture",
     candidates: [{
       finishReason: "STOP",
-      content: { parts: [{ text: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `ja:${segment.sourceText}` })) }) }] },
+      content: { parts: [{ text: JSON.stringify({ candidates: requestValue.segments.map((segment) => ({ segmentId: segment.segmentId, text: `ja:${segment.sourceText}`, knowledgeNeeds: [] })) }) }] },
     }],
     usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 9, cachedContentTokenCount: 4, totalTokenCount: 32 },
     ...overrides,

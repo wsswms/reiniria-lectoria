@@ -77,6 +77,8 @@ export class ReviewService {
           WHERE workspace_id = ? AND workflow_id = ? AND state = ? AND version = ?
         `).run(nextState, this.now().toISOString(), this.workspaceId, workflowId, requiredState, expectedVersion).changes;
         if (changed !== 1) throw new ReviewConflictError("workflow review version or state conflict");
+        this.database.prepare("UPDATE translation_flow_controls SET flow_state = ?, version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND flow_state IN ('qa','human-review','final-qa','ready-export')")
+          .run(nextState === "human-reviewed" ? "human-review" : "ready-export", this.now().toISOString(), this.workspaceId, workflowId);
         this.#event(workflowId, validationRunId, nextState, by, qualityRunId ? { qualityRunId } : {});
         this.#audit(workflowId, nextState, by, true, { validationRunId, qualityRunId, expectedVersion });
         return Object.freeze(this.#workflow(workflowId));
