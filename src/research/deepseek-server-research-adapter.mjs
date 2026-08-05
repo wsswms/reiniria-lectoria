@@ -149,7 +149,7 @@ export function normalizeDeepSeekServerResearchResponse(input, caseInput) {
       caseId: value.caseId, responseId: input.id, modelId: input.model, outcome,
       answer: outcome === "resolved-candidate" ? model.answer : "", explanation: model.explanation,
       sources: outcome === "resolved-candidate" ? sources : [], droppedSources,
-      actions: normalizedActions.map(({ completed: _completed, ...item }) => item), usage: usage(input.usage) });
+      actions: normalizedActions.filter((item) => item.completed).map(({ completed: _completed, ...item }) => item), usage: usage(input.usage) });
   } catch (error) {
     if (error instanceof DeepSeekServerResearchError) throw error;
     throw fail("malformed-response");

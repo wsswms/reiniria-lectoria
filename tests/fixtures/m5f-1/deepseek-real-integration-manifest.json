@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "m5f1-deepseek-real-integration-v1",
+  "dataClass": "public-synthetic",
+  "modelId": "deepseek-v4-flash",
+  "maximumCalls": 12,
+  "concurrency": 2,
+  "rawResponseRetention": false,
+  "credentialInjection": "fd-3",
+  "cases": [
+    {
+      "id": "penultimate-zh",
+      "question": "英语 penultimate 在表示序列位置时准确是什么意思？请用权威英语词典核实并给出中文释义。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "en",
+      "expected": "resolved",
+      "expectedTerms": ["倒数第二"]
+    },
+    {
+      "id": "xbox-rrod-en",
+      "question": "Xbox 360 出现三盏红色指示灯的著名硬件故障，英文固定俗称是什么？请用厂商资料或可靠专业媒体核实。",
+      "responseLanguage": "en",
+      "queryLanguage": "en",
+      "expected": "resolved",
+      "expectedTerms": ["Red Ring of Death", "RRoD"]
+    },
+    {
+      "id": "xbox-rrod-ja",
+      "question": "Xbox 360 の故障俗称「レッドリング・オブ・デス」に対応する英語名は何ですか。メーカー資料または信頼できる専門媒体で確認してください。",
+      "responseLanguage": "ja",
+      "queryLanguage": "ja",
+      "expected": "resolved",
+      "expectedTerms": ["Red Ring of Death", "RRoD"]
+    },
+    {
+      "id": "mol-name-en",
+      "question": "Was the U.S. Air Force MOL program formally named Manned Orbiting Laboratory or Manned Orbital Laboratory, and was the latter an earlier name? Distinguish the formal and former names using reliable sources.",
+      "responseLanguage": "en",
+      "queryLanguage": "en",
+      "expected": "resolved",
+      "expectedTerms": ["Manned Orbiting Laboratory", "Manned Orbital Laboratory"]
+    },
+    {
+      "id": "under-13-ja",
+      "question": "日本語の年齢条件「13歳未満」は、すでに13歳になった人を含みますか。信頼できる国語辞典または政府説明で境界を確認してください。",
+      "responseLanguage": "ja",
+      "queryLanguage": "ja",
+      "expected": "resolved",
+      "expectedTerms": ["含まない", "13歳に達しない"]
+    },
+    {
+      "id": "fictional-drug-cn",
+      "question": "药品 Byettara 在中国大陆获批时的正式中文商品名是什么？必须给出中国监管机构或持证商的可核查资料；找不到时明确无法确认。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "unresolved",
+      "expectedTerms": []
+    },
+    {
+      "id": "fictional-lens-cn",
+      "question": "尼康 NIKKOR Z 13-600mm f/0.7 S 镜头的中国官方产品页如何表述其防尘防水滴性能？必须引用尼康官方产品页；找不到时明确无法确认。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "unresolved",
+      "expectedTerms": []
+    },
+    {
+      "id": "focus-breathing-zh",
+      "question": "摄影镜头术语 focus breathing 指什么现象？佳能或尼康中文官方资料使用什么中文表达？",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "resolved",
+      "expectedTerms": ["呼吸效应"]
+    },
+    {
+      "id": "weather-sealing-zh",
+      "question": "相机和镜头语境中的 weather sealing 是什么意思？佳能或尼康中国官方资料通常采用什么中文表达？不要把它夸大为完全防水。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "resolved",
+      "expectedTerms": ["防尘", "水滴"]
+    },
+    {
+      "id": "rosatom-zh",
+      "question": "俄罗斯 Rosatom 这一机构的性质和常见正式中文名称是什么？请优先使用该机构或中国政府、新华社等可靠来源。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "resolved",
+      "expectedTerms": ["俄罗斯国家原子能"]
+    },
+    {
+      "id": "byetta-cn",
+      "question": "药品 Byetta 在中国大陆常见的已批准中文商品名是什么？优先寻找中国政府药品目录、监管材料或生产商资料。",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "resolved",
+      "expectedTerms": ["百泌达"]
+    },
+    {
+      "id": "remjet-zh",
+      "question": "电影胶片中的 rem-jet backing 是什么材料层、主要作用是什么？中文摄影或电影工艺语境中通常如何称呼？",
+      "responseLanguage": "zh-CN",
+      "queryLanguage": "zh-CN",
+      "expected": "resolved",
+      "expectedTerms": ["防光晕", "背层", "碳黑"]
+    }
+  ],
+  "sourceRules": [
+    { "hostname": "merriam-webster.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "oxfordlearnersdictionaries.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "oxfordlearnersdictionaries.co.uk", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "cambridge.org", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "microsoft.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "xbox.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "si.edu", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "nasa.gov", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "af.mil", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "go.jp", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "kotobank.jp", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "zdnet.com", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "smithsonianmag.com", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "thespacereview.com", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "nikon.com.cn", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "canon.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "canon.com.cn", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "nikonimglib.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "nmpa.gov.cn", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "gov.cn", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "news.cn", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "rosatom-china.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "rosatom.ru", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "smpte.org", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "kodak.com", "includeSubdomains": true, "tier": "S1" },
+    { "hostname": "dcfever.com", "includeSubdomains": true, "tier": "S3" },
+    { "hostname": "zunzheng.com", "includeSubdomains": true, "tier": "S2" },
+    { "hostname": "drugfuture.com", "includeSubdomains": true, "tier": "S3" },
+    { "hostname": "dxy.cn", "includeSubdomains": true, "tier": "S3" }
+  ]
+}
