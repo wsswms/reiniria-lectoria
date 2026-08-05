@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 29;
+export const CURRENT_SCHEMA_VERSION = 30;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -3354,6 +3354,66 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER knowledge_proposal_applications_no_delete BEFORE DELETE ON knowledge_proposal_applications BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
       CREATE TRIGGER knowledge_proposal_research_evidence_no_update BEFORE UPDATE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
       CREATE TRIGGER knowledge_proposal_research_evidence_no_delete BEFORE DELETE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 30,
+    name: "translation-reference-tools",
+    sql: `
+      CREATE TABLE translation_tool_configurations (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        schema_version TEXT NOT NULL CHECK(schema_version = 'translation-tool-configuration-v1'),
+        configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json) AND json_type(configuration_json) = 'object'),
+        configuration_digest TEXT NOT NULL CHECK(length(configuration_digest) = 71 AND substr(configuration_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id),
+        UNIQUE (workspace_id, task_id, configuration_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE translation_calculation_receipts (
+        workspace_id TEXT NOT NULL,
+        receipt_digest TEXT NOT NULL CHECK(length(receipt_digest) = 71 AND substr(receipt_digest, 1, 7) = 'sha256:'),
+        task_id TEXT NOT NULL,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+        receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json) AND json_type(receipt_json) = 'object'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, receipt_digest),
+        UNIQUE (workspace_id, task_id, request_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tool_configurations(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE translation_reference_cache_entries (
+        workspace_id TEXT NOT NULL,
+        cache_entry_digest TEXT NOT NULL CHECK(length(cache_entry_digest) = 71 AND substr(cache_entry_digest, 1, 7) = 'sha256:'),
+        task_id TEXT NOT NULL,
+        tool_kind TEXT NOT NULL CHECK(tool_kind IN ('dictionary', 'entity')),
+        provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 128),
+        provider_version TEXT NOT NULL CHECK(length(provider_version) BETWEEN 1 AND 128),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+        result_digest TEXT NOT NULL CHECK(length(result_digest) = 71 AND substr(result_digest, 1, 7) = 'sha256:'),
+        result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, cache_entry_digest),
+        UNIQUE (workspace_id, task_id, tool_kind, provider_id, provider_version, request_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tool_configurations(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TRIGGER translation_tool_configurations_no_update BEFORE UPDATE ON translation_tool_configurations
+      BEGIN SELECT RAISE(ABORT, 'translation tool configuration is immutable'); END;
+      CREATE TRIGGER translation_tool_configurations_no_delete BEFORE DELETE ON translation_tool_configurations
+      BEGIN SELECT RAISE(ABORT, 'translation tool configuration is immutable'); END;
+      CREATE TRIGGER translation_calculation_receipts_no_update BEFORE UPDATE ON translation_calculation_receipts
+      BEGIN SELECT RAISE(ABORT, 'translation calculation receipt is immutable'); END;
+      CREATE TRIGGER translation_calculation_receipts_no_delete BEFORE DELETE ON translation_calculation_receipts
+      BEGIN SELECT RAISE(ABORT, 'translation calculation receipt is immutable'); END;
+      CREATE TRIGGER translation_reference_cache_entries_no_update BEFORE UPDATE ON translation_reference_cache_entries
+      BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
+      CREATE TRIGGER translation_reference_cache_entries_no_delete BEFORE DELETE ON translation_reference_cache_entries
+      BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
     `,
   }),
 ]);

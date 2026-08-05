@@ -36,10 +36,10 @@ async function fixture() {
   return { ...value, reservation, snapshots: new DirectResearchFetchSnapshotService(value.setup.fixture.database, value.setup.fixture.workspaceId) };
 }
 
-test("schema v29 installs scoped immutable direct research fetch snapshots and generic proposal origins", async () => {
+test("schema v30 retains scoped immutable direct research fetch snapshots and generic proposal origins", async () => {
   const value = await fixture();
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 29);
+    assert.equal(CURRENT_SCHEMA_VERSION, 30);
     const table = value.setup.fixture.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_direct_fetch_snapshots'").get();
     assert.match(table.sql, /FOREIGN KEY \(workspace_id, run_id, query_id\)/);
     assert.match(value.setup.fixture.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_proposals'").get().sql,
