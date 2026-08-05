@@ -46,6 +46,17 @@ test("independent fetch plus source policy and quote match upgrades candidate", 
   assert.deepEqual(result.permissions, { mayModifyTranslation: false, mayApproveKnowledge: false });
 });
 
+test("verified artifact collector receives the full snapshot without exposing page text in the result", async () => {
+  const artifacts = [];
+  const result = await verifier().verify(providerResult, { onVerifiedSource: async (artifact) => artifacts.push(artifact) });
+  assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0].snapshot.extractedText.includes("next to the last"), true);
+  assert.equal(artifacts[0].source.quote, "next to the last");
+  assert.equal(artifacts[0].assessment.tier, "S1");
+  assert.equal(artifacts[0].match.quoteExact, true);
+  assert.equal(JSON.stringify(result).includes(artifacts[0].snapshot.extractedText), false);
+});
+
 test("unmatched quote policy rejection and fetch failure safely downgrade", async () => {
   assert.equal((await verifier({ text: "unrelated page" }).verify(providerResult)).outcome, "unresolved");
   assert.equal((await verifier({ assessment: { eligible: false, tier: null, reason: "untrusted-domain" } }).verify(providerResult)).outcome, "unresolved");
@@ -113,6 +124,14 @@ test("service performs exactly one provider call and verifies only candidates", 
   const terminal = await new DeepSeekServerResearchService({ adapter: terminalAdapter, verifier: noFetch }).research({ caseId: "case-a" });
   assert.equal(terminal.outcome, "not-found");
   assert.deepEqual(terminal.permissions, { mayModifyTranslation: false, mayApproveKnowledge: false });
+});
+
+test("service forwards the verified artifact collector without changing the public result", async () => {
+  const artifacts = [];
+  const service = new DeepSeekServerResearchService({ adapter: { research: async () => providerResult }, verifier: verifier() });
+  const result = await service.research({ caseId: "case-a" }, { credential: "fixture", onVerifiedSource: async (item) => artifacts.push(item) });
+  assert.equal(result.outcome, "resolved");
+  assert.equal(artifacts.length, 1);
 });
 
 test("cancellation during independent verification is propagated instead of mislabeled unresolved", async () => {

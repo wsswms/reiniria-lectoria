@@ -1,6 +1,6 @@
 # DeepSeek服务端自动研究组件
 
-该组件把一个有界调查问题提交给DeepSeek Responses API的服务端`web_search`，再由宿主独立读取模型实际打开的网页并核对摘录。它是独立能力，不会自行调用Brave，也没有接入翻译任务、知识库或用户批准流程。
+该组件把一个有界调查问题提交给DeepSeek Responses API的服务端`web_search`，再由宿主独立读取模型实际打开的网页并核对摘录。生产接入层已经把它连接到M5R的用户授权、预算、运行状态和证据报告；它不会自行调用Brave，也不会直接修改译文或批准知识。
 
 ## 组件边界
 
@@ -48,6 +48,36 @@ const service = new DeepSeekServerResearchService({
 
 `ConfiguredResearchSourcePolicy`默认拒绝未配置域名。它不会相信模型自己声明的`sourceClass`，且网页发生跳转后会对最终域名再次判断。调用方必须使用现有的隔离Broker或等价Secret边界注入凭据，不应把Key保存在组件配置、任务载荷、结果或日志中。
 
+## 生产接入
+
+`DeepSeekResearchIntegrationService`只接受已经包含以下授权项的ResearchGrant：
+
+- 能力：`research-model`；
+- Provider：`deepseek-server-research`；
+- 工具：短期能力令牌中的`submit-report`；
+- 预算：Search动作、唯一打开网址、模型Token和美元微单位费用的单次原子预留。
+
+DeepSeek Key由控制面打开仓库外的`0600`文件，再通过fd 3交给`invokeDeepSeekResearchBroker`。Broker只返回严格归一化的Provider结果，不返回Key、完整Provider响应或reasoning。随后宿主复核器读取网页，`DirectResearchFetchSnapshotService`把正文保存为工作区限域、不可变的direct快照；Source、Citation、Claim和Report继续沿用M5R证据等级。schema v23又把知识提案的证据来源显式区分为旧调查Fetch与直接研究Fetch；合格报告可通过同一`ResearchProposalBridge`形成草稿，但仍只有用户能批准并应用为知识事实。
+
+单一S1窄范围的词典、政府或原始来源可以形成C2；单一普通来源通常仍是C1，因此报告为`insufficient`。`not-found`和`unresolved`不创建正面Claim。unknown保守占用原预留并暂停运行，不会自动重试；中断后遗留的reservation只能由控制面显式调用恢复入口标记为unknown。
+
+```js
+import { invokeDeepSeekResearchBroker } from "../src/research/deepseek-research-broker-process.mjs";
+import { DeepSeekResearchIntegrationService } from "../src/research/deepseek-research-integration-service.mjs";
+
+const integration = new DeepSeekResearchIntegrationService(database, workspaceId, {
+  capabilities,
+  budgets,
+  runs,
+  evidence,
+  verifier,
+  invokeProvider: invokeDeepSeekResearchBroker,
+  pricingSnapshot: configuredUsdPricingSnapshot,
+});
+```
+
+真实定价必须由控制面以版本化美元微单位快照提供；接入层不把实验时期价格或汇率硬编码为永久价格。
+
 ## 输出限制
 
 最终结果明确携带：
@@ -67,7 +97,6 @@ const service = new DeepSeekServerResearchService({
 
 - Brave或其他搜索服务的条件回退；
 - `deepseek-v4-pro`自动切换；
-- 数据库持久化、ResearchGrant接入和预算预留；
 - UI、CLI及翻译工作流触发逻辑。
 
 这些能力应在组件稳定后作为独立工作链路设计，不能通过本组件隐式扩张。

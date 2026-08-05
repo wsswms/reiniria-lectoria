@@ -70,6 +70,14 @@ test("normalizer retains only completed opened HTTPS non-supplementary sources",
   assert.equal(result.actions.length, 2);
 });
 
+test("usage actions contain completed server actions only", () => {
+  const value = payload();
+  value.output.splice(1, 0, { type: "web_search_call", status: "in_progress", action: { type: "search", queries: ["unfinished"] } });
+  const result = normalizeDeepSeekServerResearchResponse(value, researchCase);
+  assert.equal(result.actions.length, 2);
+  assert.equal(result.actions.some((item) => item.queries?.includes("unfinished")), false);
+});
+
 test("not_found and unresolved are safe terminal model outcomes", () => {
   const notFound = normalizeDeepSeekServerResearchResponse(payload({ status: "not_found" }), researchCase);
   assert.equal(notFound.outcome, "not-found");

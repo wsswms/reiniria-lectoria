@@ -13,7 +13,8 @@ export class DeepSeekServerResearchService {
 
   async research(input, options = {}) {
     const provider = await this.adapter.research(input, options);
-    if (provider.outcome === "resolved-candidate") return this.verifier.verify(provider, { signal: options.signal });
+    if (provider.outcome === "resolved-candidate") return this.verifier.verify(provider,
+      { signal: options.signal, onVerifiedSource: options.onVerifiedSource });
     return finalResearchResultContract({ ...provider, schemaVersion: "deepseek-server-research-result-v1",
       answer: "", sources: [], permissions: PERMISSIONS });
   }
