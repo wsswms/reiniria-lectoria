@@ -146,6 +146,20 @@ export class ResearchEvidenceService {
       return row;
     }
     if (type === "fetch-snapshot") {
+      const direct = this.database.prepare(`SELECT requested_url AS requestedUrl, final_url AS url, status_code AS statusCode,
+        mime_type AS mimeType, title, extracted_text AS content, truncated, diagnostics_json AS diagnosticsJson,
+        redirects_json AS redirectsJson, fetch_policy_version AS policyVersion, content_digest AS contentDigest,
+        snapshot_digest AS artifactDigest FROM research_direct_fetch_snapshots
+        WHERE workspace_id = ? AND run_id = ? AND query_id = ? AND snapshot_id = ?`)
+        .get(this.workspaceId, runId, queryId, id);
+      if (direct) {
+        if (sha(direct.content) !== direct.contentDigest) throw new ResearchConflictError("fetch artifact is unavailable or corrupted");
+        const canonical = { requestedUrl: direct.requestedUrl, finalUrl: direct.url, statusCode: direct.statusCode,
+          mimeType: direct.mimeType, title: direct.title, extractedText: direct.content, truncated: direct.truncated === 1,
+          diagnostics: JSON.parse(direct.diagnosticsJson), redirects: JSON.parse(direct.redirectsJson), policyVersion: direct.policyVersion };
+        if (sha(stableJson(canonical)) !== direct.artifactDigest) throw new ResearchConflictError("fetch artifact is unavailable or corrupted");
+        return direct;
+      }
       const row = this.database.prepare(`SELECT final_url AS url, extracted_text AS content, content_digest AS contentDigest,
         snapshot_digest AS artifactDigest FROM internet_fetch_snapshots snapshot
         JOIN internet_investigations investigation ON investigation.workspace_id = snapshot.workspace_id AND investigation.investigation_id = snapshot.investigation_id

@@ -81,8 +81,9 @@ export class DeepSeekResearchSourceVerifier {
     this.minimumPhraseCoverage = minimumPhraseCoverage;
   }
 
-  async verify(input, { signal } = {}) {
+  async verify(input, { signal, onVerifiedSource } = {}) {
     const provider = providerResearchResultContract(input);
+    if (onVerifiedSource !== undefined && typeof onVerifiedSource !== "function") throw new TypeError("verified source collector is invalid");
     if (provider.outcome !== "resolved-candidate") return terminal(provider);
     assertNotCanceled(signal);
     const sources = [];
@@ -127,6 +128,8 @@ export class DeepSeekResearchSourceVerifier {
         droppedSources.push({ url: source.url, reason: "quote-mismatch" });
         continue;
       }
+      if (onVerifiedSource) await onVerifiedSource(Object.freeze({ source, snapshot,
+        assessment: Object.freeze({ tier: finalAssessment.tier, reason: finalAssessment.reason }), match }));
       sources.push({ ...source, finalUrl, tier: finalAssessment.tier,
         contentDigest: snapshot.contentDigest, snapshotDigest: snapshot.snapshotDigest,
         quoteExact: match.quoteExact, phraseCoverage: match.phraseCoverage });
