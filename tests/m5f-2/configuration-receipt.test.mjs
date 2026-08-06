@@ -27,10 +27,10 @@ async function fixture() {
     taskId: value.bound.task.task.task_id };
 }
 
-test("schema v30 installs immutable scoped tool configuration receipt and cache tables", async () => {
+test("current schema retains immutable scoped tool configuration receipt and cache tables", async () => {
   const f = await fixture();
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 30);
+    assert.equal(CURRENT_SCHEMA_VERSION, 31);
     for (const name of ["translation_tool_configurations", "translation_calculation_receipts", "translation_reference_cache_entries"]) {
       assert.ok(f.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
     }

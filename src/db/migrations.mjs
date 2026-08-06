@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 30;
+export const CURRENT_SCHEMA_VERSION = 31;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -3414,6 +3414,91 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
       CREATE TRIGGER translation_reference_cache_entries_no_delete BEFORE DELETE ON translation_reference_cache_entries
       BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 31,
+    name: "agent-runtime-minimal-ledger",
+    sql: `
+      CREATE TABLE agent_runtime_calls (
+        workspace_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        call_sequence INTEGER NOT NULL CHECK(call_sequence BETWEEN 1 AND 64),
+        turn_ordinal INTEGER NOT NULL CHECK(turn_ordinal BETWEEN 1 AND 5),
+        kind TEXT NOT NULL CHECK(kind IN ('provider', 'remote-tool', 'local-tool')),
+        name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+        tool_call_id TEXT,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        budget_reservation_id TEXT,
+        started_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, call_id),
+        UNIQUE (workspace_id, attempt_id, call_sequence),
+        UNIQUE (workspace_id, attempt_id, tool_call_id),
+        CHECK((kind = 'provider' AND tool_call_id IS NULL) OR (kind IN ('remote-tool', 'local-tool') AND tool_call_id IS NOT NULL)),
+        CHECK((kind IN ('provider', 'remote-tool') AND budget_reservation_id IS NOT NULL) OR (kind = 'local-tool' AND budget_reservation_id IS NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE agent_runtime_outcomes (
+        workspace_id TEXT NOT NULL,
+        outcome_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('completed', 'released', 'unknown', 'canceled')),
+        result_digest TEXT,
+        receipt_digest TEXT,
+        usage_json TEXT CHECK(usage_json IS NULL OR (json_valid(usage_json) AND json_type(usage_json) = 'object')),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        completed_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, outcome_id),
+        UNIQUE (workspace_id, call_id),
+        CHECK((outcome = 'completed' AND result_digest IS NOT NULL) OR (outcome <> 'completed' AND result_digest IS NULL AND receipt_digest IS NULL)),
+        FOREIGN KEY (workspace_id, call_id)
+          REFERENCES agent_runtime_calls(workspace_id, call_id),
+        FOREIGN KEY (workspace_id, attempt_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id)
+      ) STRICT;
+
+      CREATE TABLE agent_runtime_checkpoints (
+        workspace_id TEXT NOT NULL,
+        checkpoint_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 5),
+        kind TEXT NOT NULL CHECK(kind IN ('turn', 'final')),
+        transcript_json TEXT NOT NULL CHECK(json_valid(transcript_json) AND json_type(transcript_json) = 'array'),
+        transcript_digest TEXT NOT NULL CHECK(length(transcript_digest) = 71 AND substr(transcript_digest, 1, 7) = 'sha256:'),
+        final_json TEXT CHECK(final_json IS NULL OR (json_valid(final_json) AND json_type(final_json) = 'object')),
+        final_digest TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, checkpoint_id),
+        UNIQUE (workspace_id, attempt_id, kind, ordinal),
+        CHECK((kind = 'turn' AND final_json IS NULL AND final_digest IS NULL) OR (kind = 'final' AND final_json IS NOT NULL AND final_digest IS NOT NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_agent_final_per_attempt
+        ON agent_runtime_checkpoints(workspace_id, attempt_id) WHERE kind = 'final';
+      CREATE INDEX agent_open_calls
+        ON agent_runtime_calls(workspace_id, attempt_id, call_sequence);
+
+      CREATE TRIGGER agent_runtime_calls_no_update BEFORE UPDATE ON agent_runtime_calls
+      BEGIN SELECT RAISE(ABORT, 'agent runtime call is immutable'); END;
+      CREATE TRIGGER agent_runtime_calls_no_delete BEFORE DELETE ON agent_runtime_calls
+      BEGIN SELECT RAISE(ABORT, 'agent runtime call is immutable'); END;
+      CREATE TRIGGER agent_runtime_outcomes_no_update BEFORE UPDATE ON agent_runtime_outcomes
+      BEGIN SELECT RAISE(ABORT, 'agent runtime outcome is immutable'); END;
+      CREATE TRIGGER agent_runtime_outcomes_no_delete BEFORE DELETE ON agent_runtime_outcomes
+      BEGIN SELECT RAISE(ABORT, 'agent runtime outcome is immutable'); END;
+      CREATE TRIGGER agent_runtime_checkpoints_no_update BEFORE UPDATE ON agent_runtime_checkpoints
+      BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
+      CREATE TRIGGER agent_runtime_checkpoints_no_delete BEFORE DELETE ON agent_runtime_checkpoints
+      BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
     `,
   }),
 ]);
