@@ -76,3 +76,13 @@ test("HTTP API returns bounded JSON errors and health status", async () => {
     assert.deepEqual(await response.json(), { ok: false, error: { code: "UNKNOWN_COMMAND", message: "unknown workflow command" } });
   });
 });
+
+test("login attempts are bounded per remote address", async () => {
+  await withServer({ execute() {} }, { ...config, loginMaxAttempts: 2, loginWindowSeconds: 60 }, async (base) => {
+    const attempt = (password) => request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+    assert.equal((await attempt("wrong-1")).status, 401);
+    assert.equal((await attempt("wrong-2")).status, 401);
+    const limited = await attempt("test-password");
+    assert.equal(limited.status, 429); assert.equal((await limited.json()).error.code, "LOGIN_RATE_LIMITED");
+  });
+});

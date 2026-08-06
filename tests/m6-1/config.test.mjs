@@ -12,5 +12,9 @@ test("HTTP config defaults to loopback and validates bounded settings", () => {
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 8787);
   assert.equal(config.maxBodyBytes, 4 * 1024 * 1024);
+  assert.equal(config.loginMaxAttempts, 5);
+  assert.equal(config.loginWindowSeconds, 300);
+  assert.equal(config.cookieSecure, false);
   assert.throws(() => loadHttpConfig({ LECTORIA_AUTH_TOKEN: "secret", LECTORIA_PORT: "0" }), /positive integer/);
+  assert.throws(() => loadHttpConfig({ LECTORIA_AUTH_TOKEN: "secret", LECTORIA_COOKIE_SECURE: "yes" }), /true or false/);
 });

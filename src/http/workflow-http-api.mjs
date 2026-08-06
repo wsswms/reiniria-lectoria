@@ -40,6 +40,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
   if ((!api || typeof api.execute !== "function") && typeof apiForWorkspace !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
   const sessions = new Map();
+  const loginFailures = new Map();
   const sessionCookie = "lectoria_session";
   const issueSession = () => { const token = randomBytes(32).toString("base64url"); const session = { expiresAt: Date.now() + config.sessionTtlSeconds * 1000, csrfToken: randomBytes(24).toString("base64url") }; sessions.set(token, session); return { token, ...session }; };
   const sessionUser = (request) => {
@@ -61,10 +62,20 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
     if (request.method === "GET" && url.pathname === "/healthz") return jsonResponse(response, 200, health(), cors);
     if (request.method === "POST" && url.pathname === "/api/v1/session/login") {
       try {
+        const key = request.socket?.remoteAddress ?? "unknown";
+        const now = Date.now(); const failure = loginFailures.get(key);
+        if (failure && failure.resetAt > now && failure.count >= (config.loginMaxAttempts ?? 5)) throw Object.assign(new Error("too many login attempts"), { statusCode: 429, code: "LOGIN_RATE_LIMITED" });
+        if (failure && failure.resetAt <= now) loginFailures.delete(key);
         const input = await readJson(request, config.maxBodyBytes);
-        if (!input || typeof input.password !== "string" || !sameSecret(input.password, config.adminPassword)) throw Object.assign(new Error("invalid credentials"), { statusCode: 401, code: "UNAUTHENTICATED" });
+        if (!input || typeof input.password !== "string" || !sameSecret(input.password, config.adminPassword)) {
+          const current = loginFailures.get(key); const windowMs = (config.loginWindowSeconds ?? 300) * 1000;
+          loginFailures.set(key, { count: (current?.resetAt > now ? current.count : 0) + 1, resetAt: current?.resetAt > now ? current.resetAt : now + windowMs });
+          throw Object.assign(new Error("invalid credentials"), { statusCode: 401, code: "UNAUTHENTICATED" });
+        }
+        loginFailures.delete(key);
         const session = issueSession();
-        return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: "owner" }, csrfToken: session.csrfToken } }, { ...cors, "set-cookie": `${sessionCookie}=${session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}` });
+        const secure = config.cookieSecure ? "; Secure" : "";
+        return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: "owner" }, csrfToken: session.csrfToken } }, { ...cors, "set-cookie": `${sessionCookie}=${session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}${secure}` });
       } catch (error) {
         return jsonResponse(response, error.statusCode ?? 400, { ok: false, error: { code: error.code ?? "INVALID_REQUEST", message: error.message } }, cors);
       }
