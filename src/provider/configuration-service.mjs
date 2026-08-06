@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { invokeBrokerWithCredentialFile } from "./credential-file.mjs";
 
 const ADAPTERS = Object.freeze({
   deepseek: Object.freeze({ models: ["deepseek-v4-flash", "deepseek-v4-pro"], capabilities: { structuredOutput: true, thinking: true, toolCalling: true, serverSearch: true } }),
@@ -67,7 +68,22 @@ export class ProviderConfigurationService {
     const state = await this.#read();
     const candidates = state.presets.filter((preset) => preset.stage === stage && (!presetId || preset.presetId === presetId));
     if (candidates.length !== 1) throw new ProviderConfigurationConflictError(presetId ? "stage preset is not registered" : "a stage preset must be selected");
-    return Object.freeze({ ...candidates[0] });
+    const preset = candidates[0]; const source = state.sources.find((item) => item.sourceId === preset.sourceId);
+    if (!source || !source.enabled) throw new ProviderConfigurationConflictError("stage preset source is unavailable");
+    return Object.freeze({ ...preset, adapterId: source.adapterId });
+  }
+
+  async resolveExecutionSource(sourceId, modelId) {
+    const state = await this.#read(); const source = state.sources.find((item) => item.sourceId === required(sourceId, "sourceId"));
+    if (!source || !source.enabled || source.modelId !== required(modelId, "modelId")) throw new ProviderConfigurationConflictError("execution source is unavailable");
+    return Object.freeze({ sourceId: source.sourceId, adapterId: source.adapterId, modelId: source.modelId,
+      credentialPath: join(this.secretDir, `${source.sourceId}.key`), credentialRef: `file:provider/${source.sourceId}` });
+  }
+
+  async invokeSource(source, request, { signal, timeoutMs = 120_000 } = {}) {
+    if (!source || typeof source.credentialPath !== "string" || typeof source.adapterId !== "string") throw new TypeError("execution source is invalid");
+    return invokeBrokerWithCredentialFile({ credentialPath: source.credentialPath, credentialRef: source.credentialRef,
+      request: { ...request, providerId: source.adapterId } }, { timeoutMs, signal });
   }
 
   async #read() { try { return JSON.parse(await readFile(this.file, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; return baseState(); } }

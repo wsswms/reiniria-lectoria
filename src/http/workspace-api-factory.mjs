@@ -16,14 +16,32 @@ import { DeterministicFakeProvider } from "../provider/fake-provider.mjs";
 import { PricingBudgetService } from "../provider/cost-budget.mjs";
 import { FtsRetriever } from "../knowledge/fts-retriever.mjs";
 import { ManualKnowledgeService } from "../knowledge/manual-knowledge-service.mjs";
+import { randomBytes } from "node:crypto";
+import { CapabilityAuthority } from "../runner/capability.mjs";
+import { invokeProviderThroughRunner } from "../runner/provider-runner.mjs";
 
 /**
  * Build the application facade for one trusted workspace. The HTTP layer only
  * supplies the workspace id; the manager resolves and verifies the filesystem
  * and database identity before any domain service is constructed.
  */
-export function createWorkspaceApiFactory(workspaceManager) {
+export function createWorkspaceApiFactory(workspaceManager, {
+  providerConfiguration = null,
+  translationMode = "fake",
+  realProviderTimeoutMs = 120_000,
+  realMaxOutputTokens = 4_096,
+  realPricingVersion = "m6-real-pricing-v1",
+  realInputMicrosPerMillion = 2_800_000,
+  realOutputMicrosPerMillion = 5_600_000,
+  realCachedInputMicrosPerMillion = 56_000,
+  realSoftLimitMicros = 5_000_000,
+  realHardLimitMicros = 10_000_000,
+  realRunnerUid = 65_532,
+  realRunnerGid = 65_532,
+} = {}) {
   if (!workspaceManager || typeof workspaceManager.open !== "function") throw new TypeError("workspace manager is required");
+  if (!new Set(["fake", "real"]).has(translationMode)) throw new TypeError("translation mode is invalid");
+  if (translationMode === "real" && (!providerConfiguration || typeof providerConfiguration.resolveExecutionSource !== "function" || typeof providerConfiguration.invokeSource !== "function")) throw new TypeError("real translation provider configuration is required");
   return (workspaceId) => {
     const handle = workspaceManager.open(workspaceId);
     const options = { database: handle.database, root: handle.root, trustedWorkspaceId: handle.record.workspaceId };
@@ -43,16 +61,32 @@ export function createWorkspaceApiFactory(workspaceManager) {
     const retriever = { search: async (request) => { try { fts.manifest(); } catch { await fts.rebuild(); } return fts.search(request); }, rebuild: () => fts.rebuild(), manifest: () => fts.manifest() };
     const manualKnowledge = new ManualKnowledgeService({ root: handle.root, database: handle.database, workspaceId: handle.record.workspaceId, retriever });
     const offlineBudgets = new PricingBudgetService(handle.database, handle.record.workspaceId);
-    if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = 'deepseek' AND model_id = 'deepseek-v4-flash' AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId)) offlineBudgets.addPricing({ providerId: "deepseek", modelId: "deepseek-v4-flash", pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
-    if (!handle.database.prepare("SELECT 1 FROM budget_policy_snapshots WHERE workspace_id = ? AND policy_version = 'm6-fake-policy'").get(handle.record.workspaceId)) offlineBudgets.addPolicy({ policyVersion: "m6-fake-policy", currency: "CNY", softLimitMicros: 100_000_000, hardLimitMicros: 100_000_000, unknownPriceAction: "block" });
+    const pricingVersion = translationMode === "real" ? realPricingVersion : "m6-fake-v1";
+    const policyVersion = translationMode === "real" ? "m6-real-policy" : "m6-fake-policy";
+    if (translationMode === "fake" && !handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = 'deepseek' AND model_id = 'deepseek-v4-flash' AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId)) offlineBudgets.addPricing({ providerId: "deepseek", modelId: "deepseek-v4-flash", pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
+    if (!handle.database.prepare("SELECT 1 FROM budget_policy_snapshots WHERE workspace_id = ? AND policy_version = ?").get(handle.record.workspaceId, policyVersion)) offlineBudgets.addPolicy({ policyVersion, currency: "CNY", softLimitMicros: translationMode === "real" ? realSoftLimitMicros : 100_000_000, hardLimitMicros: translationMode === "real" ? realHardLimitMicros : 100_000_000, unknownPriceAction: "block" });
+    const capabilityAuthority = translationMode === "real" ? new CapabilityAuthority(randomBytes(32)) : null;
+    const realInvoke = async (request, { signal } = {}) => {
+      const source = await providerConfiguration.resolveExecutionSource(request.providerId, request.modelId);
+      const adapterRequest = { ...request, providerId: source.adapterId };
+      const response = await invokeProviderThroughRunner({ request: adapterRequest,
+        invokeProvider: (brokerRequest, options) => providerConfiguration.invokeSource(source, brokerRequest, { signal: options.signal, timeoutMs: realProviderTimeoutMs }),
+        providerOptions: { credentialRef: source.credentialRef }, capabilityAuthority, signal,
+        runnerIdentity: { uid: realRunnerUid, gid: realRunnerGid }, limits: { runtimeMs: realProviderTimeoutMs } });
+      return Object.freeze({ ...response, providerId: request.providerId });
+    };
     const baseExecutor = new TranslationExecutor(handle.database, handle.record.workspaceId, {
-      invokeProvider: (request) => new DeterministicFakeProvider({ id: request.providerId }).invoke(request), credentialRef: "fixture:m6-offline", pricingVersion: "m6-fake-v1", workerId: "m6-fake-runner", budgets: offlineBudgets,
+      invokeProvider: translationMode === "real" ? realInvoke : (request) => new DeterministicFakeProvider({ id: request.providerId }).invoke(request),
+      credentialRef: translationMode === "real" ? "file:provider/selected" : "fixture:m6-offline", pricingVersion, estimatedOutputTokens: translationMode === "real" ? realMaxOutputTokens : 1_024,
+      workerId: translationMode === "real" ? "m6-real-runner" : "m6-fake-runner", budgets: offlineBudgets,
     });
     const translationExecutor = { executeNext: async () => {
       const pending = handle.database.prepare("SELECT task.task_id AS taskId, attempt.provider_id AS providerId, attempt.model_id AS modelId FROM translation_tasks task JOIN translation_attempts attempt ON attempt.workspace_id = task.workspace_id AND attempt.task_id = task.task_id WHERE task.workspace_id = ? AND task.state IN ('queued','running') AND attempt.state IN ('queued','leased','running') AND NOT EXISTS (SELECT 1 FROM task_budget_assignments WHERE workspace_id = task.workspace_id AND task_id = task.task_id) ORDER BY task.created_at, attempt.created_at LIMIT 1").get(handle.record.workspaceId);
       if (pending) {
-        if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = ? AND model_id = ? AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId, pending.providerId, pending.modelId)) offlineBudgets.addPricing({ providerId: pending.providerId, modelId: pending.modelId, pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
-        offlineBudgets.assignTask(pending.taskId, "m6-fake-policy");
+        if (translationMode === "real") {
+          if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = ? AND model_id = ? AND pricing_version = ?").get(handle.record.workspaceId, pending.providerId, pending.modelId, pricingVersion)) offlineBudgets.addPricing({ providerId: pending.providerId, modelId: pending.modelId, pricingVersion, currency: "CNY", inputMicrosPerMillion: realInputMicrosPerMillion, outputMicrosPerMillion: realOutputMicrosPerMillion, cachedInputMicrosPerMillion: realCachedInputMicrosPerMillion, source: "configured-real-provider-pricing" });
+        } else if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = ? AND model_id = ? AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId, pending.providerId, pending.modelId)) offlineBudgets.addPricing({ providerId: pending.providerId, modelId: pending.modelId, pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
+        offlineBudgets.assignTask(pending.taskId, policyVersion);
       }
       return baseExecutor.executeNext();
     } };

@@ -13,6 +13,12 @@ function boolean(value, name, fallback) {
   throw new TypeError(`${name} must be true or false`);
 }
 
+function nonnegativeInteger(value, name, fallback) {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new TypeError(`${name} must be a non-negative integer`);
+  return parsed;
+}
+
 export function loadHttpConfig(env = process.env) {
   const token = env.LECTORIA_AUTH_TOKEN ?? "";
   if (!token) throw new Error("LECTORIA_AUTH_TOKEN is required; all application functions require login");
@@ -23,6 +29,8 @@ export function loadHttpConfig(env = process.env) {
     certFile: env.LECTORIA_TLS_CERT_FILE ?? null,
     keyFile: env.LECTORIA_TLS_KEY_FILE ?? null,
   });
+  const translationMode = env.LECTORIA_TRANSLATION_MODE ?? "fake";
+  if (!new Set(["fake", "real"]).has(translationMode)) throw new TypeError("LECTORIA_TRANSLATION_MODE must be fake or real");
   return Object.freeze({
     host: env.LECTORIA_HOST ?? "127.0.0.1",
     port: positiveInteger(env.LECTORIA_PORT, "LECTORIA_PORT", 8787),
@@ -38,6 +46,17 @@ export function loadHttpConfig(env = process.env) {
     cookieSecure: boolean(env.LECTORIA_COOKIE_SECURE, "LECTORIA_COOKIE_SECURE", Boolean(tls.certFile)),
     allowedOrigins,
     tls,
+    translationMode,
+    realProviderTimeoutMs: positiveInteger(env.LECTORIA_REAL_PROVIDER_TIMEOUT_MS, "LECTORIA_REAL_PROVIDER_TIMEOUT_MS", 120_000),
+    realMaxOutputTokens: positiveInteger(env.LECTORIA_REAL_MAX_OUTPUT_TOKENS, "LECTORIA_REAL_MAX_OUTPUT_TOKENS", 4_096),
+    realPricingVersion: env.LECTORIA_REAL_PRICING_VERSION ?? "m6-real-pricing-v1",
+    realInputMicrosPerMillion: nonnegativeInteger(env.LECTORIA_REAL_INPUT_MICROS_PER_MILLION, "LECTORIA_REAL_INPUT_MICROS_PER_MILLION", 2_800_000),
+    realOutputMicrosPerMillion: nonnegativeInteger(env.LECTORIA_REAL_OUTPUT_MICROS_PER_MILLION, "LECTORIA_REAL_OUTPUT_MICROS_PER_MILLION", 5_600_000),
+    realCachedInputMicrosPerMillion: nonnegativeInteger(env.LECTORIA_REAL_CACHED_INPUT_MICROS_PER_MILLION, "LECTORIA_REAL_CACHED_INPUT_MICROS_PER_MILLION", 56_000),
+    realSoftLimitMicros: positiveInteger(env.LECTORIA_REAL_SOFT_LIMIT_MICROS, "LECTORIA_REAL_SOFT_LIMIT_MICROS", 5_000_000),
+    realHardLimitMicros: positiveInteger(env.LECTORIA_REAL_HARD_LIMIT_MICROS, "LECTORIA_REAL_HARD_LIMIT_MICROS", 10_000_000),
+    realRunnerUid: positiveInteger(env.LECTORIA_REAL_RUNNER_UID, "LECTORIA_REAL_RUNNER_UID", 65532),
+    realRunnerGid: positiveInteger(env.LECTORIA_REAL_RUNNER_GID, "LECTORIA_REAL_RUNNER_GID", 65532),
   });
 }
 
