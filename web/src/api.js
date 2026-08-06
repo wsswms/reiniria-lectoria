@@ -23,4 +23,6 @@ export const workflow = {
   confirmImport: (workspaceId, importId) => workflow.execute("document:confirm", { workspaceId, importId }),
   create: (workspaceId, input) => workflow.execute("workflow:create", { workspaceId, ...input }),
   get: (workspaceId, workflowId) => workflow.execute("workflow:get", { workspaceId, workflowId }),
+  submitPlan: (workspaceId, workflowId, expectedVersion) => workflow.execute("plan:submit", { workspaceId, workflowId, expectedVersion }),
+  decidePlan: (workspaceId, workflowId, expectedVersion, decision) => workflow.execute("plan:decide", { workspaceId, workflowId, expectedVersion, decision }),
 };

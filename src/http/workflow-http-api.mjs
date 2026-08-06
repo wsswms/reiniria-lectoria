@@ -2,10 +2,12 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const AUTH_COMMANDS = new Set([
   "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic", "workflow:create",
+  "plan:decide", "guidance:decide", "context:decide", "flow:resolve",
   "candidate:add", "candidate:select", "working-copy:edit", "warning:confirm",
-  "quality:confirm-warning", "review", "approve", "internet:create", "internet:fetch",
+  "quality:confirm-warning", "qa:decide", "qa:retranslate", "review", "approve", "internet:create", "internet:fetch",
   "proposal:create", "proposal:revise", "proposal:decide", "proposal:apply",
 ]);
+const SYSTEM_COMMANDS = new Set(["plan:submit", "guidance:propose", "guidance:interpret", "context:assemble"]);
 
 function sameSecret(actual, expected) {
   const a = Buffer.from(actual); const b = Buffer.from(expected);
@@ -99,6 +101,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       if (apiForWorkspace && (typeof workspaceId !== "string" || workspaceId.length === 0)) throw Object.assign(new Error("workspaceId is required"), { statusCode: 400, code: "WORKSPACE_REQUIRED" });
       const payload = { ...input.payload };
       if (AUTH_COMMANDS.has(input.command)) payload.actor = { type: "user", id: user.id };
+      if (SYSTEM_COMMANDS.has(input.command)) payload.actor = { type: "system", id: "http-control" };
       let selected = api;
       let close = () => {};
       if (apiForWorkspace) {

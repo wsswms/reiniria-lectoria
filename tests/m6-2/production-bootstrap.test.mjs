@@ -45,7 +45,19 @@ test("production HTTP bootstrap executes document and workflow commands in the s
       body: JSON.stringify({ command: "workflow:create", payload: { workspaceId: workspace.workspaceId, importId: imported.importId, workflowId, targetLanguage: "zh-CN" } }),
     });
     assert.equal(workflowResponse.status, 200, JSON.stringify(workflowResponse.json()));
-    assert.equal(workflowResponse.json().data.workflow.workflowId, workflowId);
+    let flow = workflowResponse.json().data;
+    assert.equal(flow.workflow.workflowId, workflowId);
+    const submittedResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ command: "plan:submit", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: flow.planHead.version, actor: { type: "user", id: "forged" } } }),
+    });
+    assert.equal(submittedResponse.status, 200); flow = submittedResponse.json().data;
+    assert.equal(flow.planHead.state, "pending-user");
+    const approvedResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ command: "plan:decide", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: flow.planHead.version, decision: "approved", actor: { type: "system", id: "forged" } } }),
+    });
+    assert.equal(approvedResponse.status, 200); assert.equal(approvedResponse.json().data.planHead.state, "approved");
   } finally {
     await new Promise((resolve) => server.close(resolve)); manager.close(); await rm(root, { recursive: true, force: true });
   }

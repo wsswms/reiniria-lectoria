@@ -2,6 +2,11 @@ import { DocumentImportService } from "../document/import-service.mjs";
 import { ReimportService } from "../document/reimport-service.mjs";
 import { WorkflowApi } from "../application/workflow-api.mjs";
 import { FlowPlanService } from "../m5c/flow-plan-service.mjs";
+import { WorkCopyService } from "../translation/work-copy-service.mjs";
+import { ValidationService } from "../translation/validator.mjs";
+import { QualityService } from "../quality/quality-service.mjs";
+import { ReviewService } from "../translation/review-service.mjs";
+import { ExportService } from "../export/export-service.mjs";
 
 /**
  * Build the application facade for one trusted workspace. The HTTP layer only
@@ -16,7 +21,12 @@ export function createWorkspaceApiFactory(workspaceManager) {
     const imports = new DocumentImportService(options);
     const reimports = new ReimportService(options);
     const flowPlans = new FlowPlanService(handle.database, handle.record.workspaceId);
-    const api = new WorkflowApi({ imports, reimports, flowPlans });
+    const workCopies = new WorkCopyService(handle.database, handle.record.workspaceId);
+    const validation = new ValidationService(handle.database, handle.record.workspaceId, { workCopies });
+    const quality = new QualityService(handle.database, handle.record.workspaceId, { workCopies, validation });
+    const reviews = new ReviewService(handle.database, handle.record.workspaceId, { validation, quality });
+    const exports = new ExportService({ ...options, workCopies, validation, quality });
+    const api = new WorkflowApi({ imports, reimports, flowPlans, workCopies, validation, reviews, exports });
     return Object.freeze({ api, close: () => handle.database.close() });
   };
 }
