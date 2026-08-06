@@ -40,6 +40,8 @@
     "test:m5c.5": "node --test tests/m5c-5/*.test.mjs",
     "test:m5f": "node --test tests/m5f/*.test.mjs",
     "test:m5f.1": "node --test tests/m5f-1/*.test.mjs",
+    "test:m6.1": "node --test tests/m6-1/*.test.mjs",
+    "test:m6.2": "node --test tests/m6-2/*.test.mjs",
     "test:m5f.2": "node --test tests/m5f-2/*.test.mjs",
     "test:m5p.2": "node --test tests/m5p-2/*.test.mjs",
     "test:m5p.3": "node --test tests/m5p-3/*.test.mjs",
