@@ -10,6 +10,9 @@ const NEVER_RETRY = new Set(["auth", "malformed-response", "policy", "budget", "
 const MAX_OUTPUT_TOKENS = 1_000_000;
 const EVIDENCE_KINDS = new Set(["term", "style", "knowledge"]);
 const EVIDENCE_FIELDS = new Set(["title", "body", "terms", "tags"]);
+const CONTEXT_INSTRUCTION_TYPES = new Set(["hard-constraint", "preferred", "background", "disputed", "warning-only"]);
+const KNOWLEDGE_NEED_KINDS = new Set(["term", "entity", "fact", "relation", "measurement"]);
+const KNOWLEDGE_NEED_IMPACTS = new Set(["critical", "high", "medium", "low"]);
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 function requiredString(value, name) {
@@ -114,6 +117,23 @@ function requestEvidence(input) {
   });
 }
 
+function requestTranslationContext(input, segmentIds) {
+  if (!input || typeof input !== "object" || input.schemaVersion !== "m5c-temporary-context-v1"
+    || !UUID.test(input.contextRevisionId ?? "") || !SHA256.test(input.contextDigest ?? "")
+    || !Array.isArray(input.items) || input.items.length > 256) throw new TypeError("translationContext is invalid");
+  const allowed = new Set(segmentIds);
+  const items = input.items.map((item) => {
+    if (!item || typeof item !== "object" || !UUID.test(item.contextItemId ?? "") || !CONTEXT_INSTRUCTION_TYPES.has(item.instructionType)
+      || !["plan-item", "research-claim", "user-guidance"].includes(item.sourceType) || !SHA256.test(item.sourceDigest ?? "")
+      || !SHA256.test(item.contentDigest ?? "") || !Array.isArray(item.segmentIds) || item.segmentIds.some((id) => !UUID.test(id) || !allowed.has(id))
+      || !item.content || typeof item.content !== "object" || Array.isArray(item.content) || typeof item.affirmative !== "boolean"
+      || (["disputed", "warning-only"].includes(item.instructionType) && item.affirmative)) throw new TypeError("translationContext item is invalid");
+    return Object.freeze({ ...item, segmentIds: Object.freeze([...item.segmentIds]), content: Object.freeze({ ...item.content }) });
+  });
+  if (Buffer.byteLength(JSON.stringify(items)) > 128 * 1024) throw new TypeError("translationContext exceeds limits");
+  return Object.freeze({ schemaVersion: input.schemaVersion, contextRevisionId: input.contextRevisionId, contextDigest: input.contextDigest, items: Object.freeze(items) });
+}
+
 export function providerRequestContract(input) {
   if (!input || typeof input !== "object") throw new TypeError("provider request must be an object");
   if (!Array.isArray(input.segments) || input.segments.length === 0) throw new TypeError("segments must be a non-empty array");
@@ -144,6 +164,7 @@ export function providerRequestContract(input) {
       || Buffer.byteLength(JSON.stringify(evidence)) > 128 * 1024) throw new TypeError("evidence scope or limits are invalid");
     output.evidence = Object.freeze(evidence);
   }
+  if (input.translationContext !== undefined) output.translationContext = requestTranslationContext(input.translationContext, segments.map((segment) => segment.segmentId));
   return Object.freeze(output);
 }
 
@@ -160,14 +181,31 @@ export function providerUsageContract(input) {
   return Object.freeze(usage);
 }
 
+export function candidateKnowledgeNeedContract(input, allowedSegmentIds) {
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).sort().join(",") !== "impact,kind,question,relatedSegmentIds"
+    || !KNOWLEDGE_NEED_KINDS.has(input.kind) || !KNOWLEDGE_NEED_IMPACTS.has(input.impact)
+    || typeof input.question !== "string" || input.question.length < 1 || input.question.length > 512
+    || !Array.isArray(input.relatedSegmentIds) || input.relatedSegmentIds.length < 1 || input.relatedSegmentIds.length > 16
+    || new Set(input.relatedSegmentIds).size !== input.relatedSegmentIds.length
+    || input.relatedSegmentIds.some((segmentId) => !allowedSegmentIds.has(segmentId))) throw new TypeError("candidate knowledge need is invalid");
+  return Object.freeze({ kind: input.kind, impact: input.impact, question: input.question,
+    relatedSegmentIds: Object.freeze([...input.relatedSegmentIds]) });
+}
+
 export function providerResponseContract(input, requestInput) {
   if (!input || typeof input !== "object") throw new TypeError("provider response must be an object");
   const request = providerRequestContract(requestInput);
   if (!Array.isArray(input.candidates)) throw new TypeError("candidates must be an array");
   const expected = request.segments.map((segment) => segment.segmentId).sort();
-  const candidates = input.candidates.map((candidate) => {
+  const allowedSegmentIds = new Set(expected); const candidates = input.candidates.map((candidate) => {
     if (!candidate || typeof candidate !== "object" || typeof candidate.text !== "string") throw new TypeError("candidate text must be a string");
-    return Object.freeze({ segmentId: id(candidate.segmentId, "segmentId"), text: candidate.text });
+    const segmentId = id(candidate.segmentId, "segmentId"); const rawNeeds = candidate.knowledgeNeeds ?? [];
+    if (!Array.isArray(rawNeeds) || rawNeeds.length > 8) throw new TypeError("candidate knowledge needs must be bounded");
+    const knowledgeNeeds = rawNeeds.map((need) => candidateKnowledgeNeedContract(need, allowedSegmentIds));
+    if (knowledgeNeeds.some((need) => !need.relatedSegmentIds.includes(segmentId))
+      || new Set(knowledgeNeeds.map((need) => `${need.kind}:${need.question}`)).size !== knowledgeNeeds.length) throw new TypeError("candidate knowledge needs must be segment-bound and unique");
+    return Object.freeze({ segmentId, text: candidate.text, knowledgeNeeds: Object.freeze(knowledgeNeeds) });
   });
   const actual = candidates.map((candidate) => candidate.segmentId).sort();
   if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {

@@ -101,6 +101,10 @@ export class TranslationTaskOrchestrator {
         JOIN translation_workflows w ON w.workspace_id = a.workspace_id AND w.workflow_id = a.workflow_id
         WHERE a.workspace_id = ? AND t.state IN ('queued', 'running')
           AND w.state NOT IN ('stale', 'rejected', 'exported')
+          AND (NOT EXISTS (SELECT 1 FROM translation_flow_controls flow WHERE flow.workspace_id = a.workspace_id AND flow.workflow_id = a.workflow_id)
+            OR (EXISTS (SELECT 1 FROM m5c_translation_attempt_bindings binding WHERE binding.workspace_id = a.workspace_id AND binding.attempt_id = a.attempt_id)
+              AND EXISTS (SELECT 1 FROM translation_flow_controls flow WHERE flow.workspace_id = a.workspace_id AND flow.workflow_id = a.workflow_id
+                AND flow.flow_state IN ('translating','remediation') AND flow.outcome_state = 'none')))
           AND (a.state = 'queued' OR (a.state = 'retry-wait' AND r.next_retry_at <= ?))
           AND (
             NOT EXISTS (
@@ -124,6 +128,8 @@ export class TranslationTaskOrchestrator {
         .run(workerId, expiry, timestamp, this.workspaceId, candidate.attempt_id);
       this.database.prepare("UPDATE translation_tasks SET state = 'running', version = version + 1, updated_at = ? WHERE workspace_id = ? AND task_id = ? AND state = 'queued'")
         .run(timestamp, this.workspaceId, candidate.task_id);
+      this.database.prepare("UPDATE translation_workflows SET state = 'generating', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'queued'")
+        .run(timestamp, this.workspaceId, candidate.workflow_id);
       this.#event(candidate.task_id, candidate.attempt_id, "leased", { workerId, expiry }, timestamp);
       this.inject("after-lease-writes");
       return Object.freeze({ ...candidate, state: "leased", version: candidate.version + 1, leaseHolder: workerId, leaseExpiresAt: expiry });
@@ -187,8 +193,12 @@ export class TranslationTaskOrchestrator {
       this.#event(current.task_id, attemptId, "completed", { outcomeDigest }, timestamp);
       const remaining = this.database.prepare("SELECT count(*) AS total FROM translation_attempts WHERE workspace_id = ? AND task_id = ? AND state != 'completed' AND attempt_id IN (SELECT attempt_id FROM attempt_runtime_states WHERE workspace_id = ? AND task_id = ? AND attempt_number = (SELECT max(r2.attempt_number) FROM attempt_runtime_states r2 WHERE r2.workspace_id = attempt_runtime_states.workspace_id AND r2.task_id = attempt_runtime_states.task_id AND r2.segment_id = attempt_runtime_states.segment_id))")
         .get(this.workspaceId, current.task_id, this.workspaceId, current.task_id).total;
-      if (remaining === 0) this.database.prepare("UPDATE translation_tasks SET state = 'completed', version = version + 1, updated_at = ? WHERE workspace_id = ? AND task_id = ?")
-        .run(timestamp, this.workspaceId, current.task_id);
+      if (remaining === 0) {
+        this.database.prepare("UPDATE translation_tasks SET state = 'completed', version = version + 1, updated_at = ? WHERE workspace_id = ? AND task_id = ?")
+          .run(timestamp, this.workspaceId, current.task_id);
+        this.database.prepare("UPDATE translation_workflows SET state = 'draft-machine', version = version + 1, updated_at = ? WHERE workspace_id = ? AND workflow_id = ? AND state = 'generating'")
+          .run(timestamp, this.workspaceId, current.workflow_id);
+      }
       this.inject("after-complete-writes");
       return Object.freeze({ attemptId, state: "completed", version: expectedVersion + 1 });
     })();

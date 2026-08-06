@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, open, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { invokeBrokerProcess, BrokerProcessError } from "../../src/provider/broker-process.mjs";
 import { invokeBrokerWithCredentialFile, openCredentialFile } from "../../src/provider/credential-file.mjs";
+import { auditWriterForDescriptor } from "../../src/provider/llm-call-audit.mjs";
 
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const hangingBroker = new URL("./broker-hang-fixture.mjs", import.meta.url);
@@ -91,4 +92,27 @@ test("killing an unresponsive Broker after request handoff is a non-retryable un
     request: request(), credentialRef: "test:fake-primary", credential: "fixture",
   }, { entry: hangingBroker, timeoutMs: 25 }), (error) => error instanceof BrokerProcessError
     && error.category === "unknown-outcome" && error.retryable === false);
+});
+
+test("LLM audit descriptors require a current-user private regular file and append crash-safe JSONL events", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-llm-audit-fd-")); const path = join(root, "call.json"); let handle;
+  try {
+    handle = await open(path, "wx", 0o600); const writer = auditWriterForDescriptor(handle.fd); writer({ event: "request", request: "full" }); writer({ event: "response", response: "full" });
+    assert.deepEqual((await readFile(path, "utf8")).trim().split("\n").map(JSON.parse),
+      [{ event: "request", request: "full" }, { event: "response", response: "full" }]); await handle.close(); handle = undefined;
+    await chmod(path, 0o644); handle = await open(path, "r+"); assert.throws(() => auditWriterForDescriptor(handle.fd), /0600/);
+  } finally { await handle?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("translation Broker passes private audit fd 4 and records pre-network auth failures without credential leakage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-translation-broker-audit-")); const auditPath = join(root, "call.jsonl"); let auditHandle;
+  try {
+    auditHandle = await open(auditPath, "wx", 0o600); const secret = "invalid translation credential";
+    await assert.rejects(invokeBrokerProcess({ request: request("deepseek"), credentialRef: "test:deepseek", credential: secret,
+      auditFd: auditHandle.fd, evaluationScope: "m5c-real-article-audit-v1" }),
+    (error) => error instanceof BrokerProcessError && error.category === "auth"); await auditHandle.close(); auditHandle = undefined;
+    const text = await readFile(auditPath, "utf8"); const events = text.trim().split("\n").map(JSON.parse);
+    assert.deepEqual(events.map((event) => event.event), ["request", "response"]); assert.equal(text.includes(secret), false);
+    assert.equal(text.includes("authorization"), false); assert.equal(events[1].outcome.error.category, "auth");
+  } finally { await auditHandle?.close(); await rm(root, { recursive: true, force: true }); }
 });

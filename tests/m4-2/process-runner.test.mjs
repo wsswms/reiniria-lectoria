@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,7 +11,7 @@ const fixture = new URL("./process-fixture.mjs", import.meta.url);
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 
 function taskFixture(overrides = {}) {
-  return {
+  const task = {
     schemaVersion: RUNNER_TASK_VERSION,
     request: {
       workspaceId: randomUUID(), taskId: randomUUID(), attemptId: randomUUID(), workflowId: randomUUID(), sourceRevisionId: randomUUID(),
@@ -22,6 +22,15 @@ function taskFixture(overrides = {}) {
     limits: { inputBytes: 65536, outputBytes: 65536, toolCalls: 2, runtimeMs: 1000 },
     ...overrides,
   };
+  const segment = task.request.segments[0];
+  task.brokerResponse ??= {
+    responseId: "fixture-response",
+    providerId: task.request.providerId,
+    modelId: task.request.modelId,
+    candidates: [{ segmentId: segment.segmentId, text: "こんにちは" }],
+    usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, totalTokens: 2 },
+  };
+  return task;
 }
 
 test("production runner entry uses Pi Agent core and emits one validated structured result", async () => {
@@ -72,6 +81,13 @@ test("runner process environment is allowlisted and output/input limits fail clo
 
 test("unprivileged Runner cannot read a root-only secret path or the control-plane credential fd", async () => {
   if (typeof process.getuid !== "function" || process.getuid() !== 0) return;
+  // A root process without CAP_SETUID (the intended cap-drop test container)
+  // cannot create the lower-privilege child this fixture exercises.
+  try {
+    const status = await readFile("/proc/self/status", "utf8");
+    const capEff = /^CapEff:\s+([0-9a-f]+)$/mu.exec(status)?.[1];
+    if (capEff && /^0+$/u.test(capEff)) return;
+  } catch {}
   const root = await mkdtemp(join(tmpdir(), "lectoria-runner-secret-"));
   const secretPath = join(root, "provider.key");
   let handle;

@@ -52,7 +52,7 @@ function adapterSuccess(url, init) {
   const requestData = JSON.parse(origin === GEMINI_API_ORIGIN
     ? outbound.contents[0].parts[0].text
     : origin === OPENAI_API_ORIGIN ? outbound.input : outbound.messages[1].content);
-  const candidates = requestData.segments.map((segment) => ({ segmentId: segment.segmentId, text: `translated:${segment.sourceText}` }));
+  const candidates = requestData.segments.map((segment) => ({ segmentId: segment.segmentId, text: `translated:${segment.sourceText}`, knowledgeNeeds: [] }));
   if (origin === GEMINI_API_ORIGIN) return new Response(JSON.stringify({
     responseId: "gemini-chain-response",
     candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({ candidates }) }] } }],

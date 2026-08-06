@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 31;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -2463,6 +2463,1044 @@ export const MIGRATIONS = Object.freeze([
       CREATE TRIGGER web_search_artifact_results_no_delete BEFORE DELETE ON web_search_artifact_results BEGIN SELECT RAISE(ABORT, 'web search artifact result is immutable'); END;
     `,
   }),
+  Object.freeze({
+    version: 22,
+    name: "m5c-flow-plan-guidance-budget-foundation",
+    sql: `
+      CREATE TABLE translation_flow_controls (
+        workspace_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        flow_state TEXT NOT NULL CHECK(flow_state IN (
+          'planning', 'plan-approval', 'research', 'context-approval', 'translating',
+          'qa', 'remediation', 'human-review', 'final-qa', 'ready-export',
+          'exported', 'disposition', 'closed', 'paused', 'canceled', 'failed'
+        )),
+        outcome_state TEXT NOT NULL CHECK(outcome_state IN ('none', 'partial', 'complete', 'failed', 'unknown')),
+        pause_reason TEXT,
+        planner_enabled INTEGER NOT NULL CHECK(planner_enabled IN (0, 1)),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        qa_cycles INTEGER NOT NULL DEFAULT 0 CHECK(qa_cycles >= 0),
+        research_cycles INTEGER NOT NULL DEFAULT 0 CHECK(research_cycles >= 0),
+        retranslation_count INTEGER NOT NULL DEFAULT 0 CHECK(retranslation_count >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, workflow_id),
+        CHECK((flow_state = 'paused' AND pause_reason IS NOT NULL) OR (flow_state <> 'paused' AND pause_reason IS NULL)),
+        CHECK((outcome_state = 'unknown' AND flow_state = 'paused') OR outcome_state <> 'unknown'),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_workflows(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE translation_flow_events (
+        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'model', 'provider', 'runner', 'fixture')),
+        actor_id TEXT NOT NULL,
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, event_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE flow_budget_policy_revisions (
+        workspace_id TEXT NOT NULL,
+        policy_revision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        policy_json TEXT NOT NULL CHECK(json_valid(policy_json) AND json_type(policy_json) = 'object'),
+        policy_digest TEXT NOT NULL CHECK(length(policy_digest) = 71 AND substr(policy_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, policy_revision_id),
+        UNIQUE (workspace_id, workflow_id, revision),
+        UNIQUE (workspace_id, workflow_id, policy_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE flow_budget_policy_heads (
+        workspace_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        policy_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, workflow_id),
+        FOREIGN KEY (workspace_id, workflow_id, policy_revision_id)
+          REFERENCES flow_budget_policy_revisions(workspace_id, workflow_id, policy_revision_id)
+      ) STRICT;
+
+      CREATE TABLE flow_budget_ledger (
+        workspace_id TEXT NOT NULL,
+        entry_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        policy_revision_id TEXT NOT NULL,
+        reservation_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('planner', 'search', 'fetch', 'research', 'translation', 'qa', 'retranslation')),
+        entry_type TEXT NOT NULL CHECK(entry_type IN ('reserved', 'settled', 'released', 'unknown')),
+        calls INTEGER NOT NULL CHECK(calls >= 0),
+        input_tokens INTEGER NOT NULL CHECK(input_tokens >= 0),
+        output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+        cost_micros_cny INTEGER NOT NULL CHECK(cost_micros_cny >= 0),
+        cost_micros_usd INTEGER NOT NULL CHECK(cost_micros_usd >= 0),
+        duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+        usage_json TEXT NOT NULL CHECK(json_valid(usage_json) AND json_type(usage_json) = 'object'),
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, entry_id),
+        UNIQUE (workspace_id, workflow_id, reservation_id, entry_type),
+        FOREIGN KEY (workspace_id, workflow_id, policy_revision_id)
+          REFERENCES flow_budget_policy_revisions(workspace_id, workflow_id, policy_revision_id)
+      ) STRICT;
+
+      CREATE TABLE translation_context_plan_revisions (
+        workspace_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        document_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        planner_mode TEXT NOT NULL CHECK(planner_mode IN ('local', 'model-assisted')),
+        execution_state TEXT NOT NULL CHECK(execution_state IN ('draft', 'pending-user', 'approved', 'rejected', 'canceled', 'failed', 'unknown', 'stale')),
+        plan_json TEXT NOT NULL CHECK(json_valid(plan_json) AND json_type(plan_json) = 'object'),
+        plan_digest TEXT NOT NULL CHECK(length(plan_digest) = 71 AND substr(plan_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('system', 'model', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, plan_revision_id),
+        UNIQUE (workspace_id, workflow_id, revision),
+        UNIQUE (workspace_id, workflow_id, plan_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, document_id, source_revision_id, target_language)
+          REFERENCES translation_workflows(workspace_id, workflow_id, document_id, source_revision_id, target_language)
+      ) STRICT;
+
+      CREATE TABLE translation_context_plan_heads (
+        workspace_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'approved', 'rejected', 'canceled', 'failed', 'unknown', 'stale')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, workflow_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TABLE translation_context_plan_items (
+        workspace_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'entity', 'fact', 'relation', 'style', 'measurement')),
+        coverage TEXT NOT NULL CHECK(coverage IN ('covered', 'partially-covered', 'conflicted', 'stale', 'uncovered', 'low-impact')),
+        instruction_type TEXT NOT NULL CHECK(instruction_type IN ('hard-constraint', 'preferred', 'background', 'disputed', 'warning-only')),
+        impact TEXT NOT NULL CHECK(impact IN ('critical', 'high', 'medium', 'low')),
+        segment_ids_json TEXT NOT NULL CHECK(json_valid(segment_ids_json) AND json_type(segment_ids_json) = 'array'),
+        dependency_json TEXT NOT NULL CHECK(json_valid(dependency_json) AND json_type(dependency_json) = 'object'),
+        dependency_digest TEXT NOT NULL CHECK(length(dependency_digest) = 71 AND substr(dependency_digest, 1, 7) = 'sha256:'),
+        item_json TEXT NOT NULL CHECK(json_valid(item_json) AND json_type(item_json) = 'object'),
+        item_digest TEXT NOT NULL CHECK(length(item_digest) = 71 AND substr(item_digest, 1, 7) = 'sha256:'),
+        PRIMARY KEY (workspace_id, item_id),
+        UNIQUE (workspace_id, plan_revision_id, item_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TABLE translation_context_plan_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected', 'canceled')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, plan_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TABLE user_guidance_revisions (
+        workspace_id TEXT NOT NULL,
+        guidance_revision_id TEXT NOT NULL,
+        guidance_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        raw_text TEXT NOT NULL CHECK(length(raw_text) BETWEEN 1 AND 16384),
+        raw_digest TEXT NOT NULL CHECK(length(raw_digest) = 71 AND substr(raw_digest, 1, 7) = 'sha256:'),
+        interpretation_json TEXT NOT NULL CHECK(json_valid(interpretation_json) AND json_type(interpretation_json) = 'object'),
+        interpretation_digest TEXT NOT NULL CHECK(length(interpretation_digest) = 71 AND substr(interpretation_digest, 1, 7) = 'sha256:'),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'confirmed', 'rejected', 'canceled', 'failed', 'unknown')),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('system', 'model', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, guidance_revision_id),
+        UNIQUE (workspace_id, guidance_id, revision),
+        UNIQUE (workspace_id, guidance_id, guidance_revision_id),
+        UNIQUE (workspace_id, workflow_id, guidance_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE user_guidance_heads (
+        workspace_id TEXT NOT NULL,
+        guidance_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        guidance_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'confirmed', 'rejected', 'canceled', 'failed', 'unknown')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, guidance_id),
+        FOREIGN KEY (workspace_id, workflow_id, guidance_revision_id)
+          REFERENCES user_guidance_revisions(workspace_id, workflow_id, guidance_revision_id)
+      ) STRICT;
+
+      CREATE TABLE user_guidance_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        guidance_id TEXT NOT NULL,
+        guidance_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('confirmed', 'rejected', 'canceled')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, guidance_revision_id),
+        FOREIGN KEY (workspace_id, guidance_id, guidance_revision_id)
+          REFERENCES user_guidance_revisions(workspace_id, guidance_id, guidance_revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER translation_flow_events_no_update BEFORE UPDATE ON translation_flow_events BEGIN SELECT RAISE(ABORT, 'translation flow event is append-only'); END;
+      CREATE TRIGGER translation_flow_events_no_delete BEFORE DELETE ON translation_flow_events BEGIN SELECT RAISE(ABORT, 'translation flow event is append-only'); END;
+      CREATE TRIGGER flow_budget_policy_revisions_no_update BEFORE UPDATE ON flow_budget_policy_revisions BEGIN SELECT RAISE(ABORT, 'flow budget policy revision is immutable'); END;
+      CREATE TRIGGER flow_budget_policy_revisions_no_delete BEFORE DELETE ON flow_budget_policy_revisions BEGIN SELECT RAISE(ABORT, 'flow budget policy revision is immutable'); END;
+      CREATE TRIGGER flow_budget_ledger_no_update BEFORE UPDATE ON flow_budget_ledger BEGIN SELECT RAISE(ABORT, 'flow budget ledger is append-only'); END;
+      CREATE TRIGGER flow_budget_ledger_no_delete BEFORE DELETE ON flow_budget_ledger BEGIN SELECT RAISE(ABORT, 'flow budget ledger is append-only'); END;
+      CREATE TRIGGER translation_context_plan_revisions_no_update BEFORE UPDATE ON translation_context_plan_revisions BEGIN SELECT RAISE(ABORT, 'context plan revision is immutable'); END;
+      CREATE TRIGGER translation_context_plan_revisions_no_delete BEFORE DELETE ON translation_context_plan_revisions BEGIN SELECT RAISE(ABORT, 'context plan revision is immutable'); END;
+      CREATE TRIGGER translation_context_plan_items_no_update BEFORE UPDATE ON translation_context_plan_items BEGIN SELECT RAISE(ABORT, 'context plan item is immutable'); END;
+      CREATE TRIGGER translation_context_plan_items_no_delete BEFORE DELETE ON translation_context_plan_items BEGIN SELECT RAISE(ABORT, 'context plan item is immutable'); END;
+      CREATE TRIGGER translation_context_plan_decisions_no_update BEFORE UPDATE ON translation_context_plan_decisions BEGIN SELECT RAISE(ABORT, 'context plan decision is immutable'); END;
+      CREATE TRIGGER translation_context_plan_decisions_no_delete BEFORE DELETE ON translation_context_plan_decisions BEGIN SELECT RAISE(ABORT, 'context plan decision is immutable'); END;
+      CREATE TRIGGER user_guidance_revisions_no_update BEFORE UPDATE ON user_guidance_revisions BEGIN SELECT RAISE(ABORT, 'user guidance revision is immutable'); END;
+      CREATE TRIGGER user_guidance_revisions_no_delete BEFORE DELETE ON user_guidance_revisions BEGIN SELECT RAISE(ABORT, 'user guidance revision is immutable'); END;
+      CREATE TRIGGER user_guidance_decisions_no_update BEFORE UPDATE ON user_guidance_decisions BEGIN SELECT RAISE(ABORT, 'user guidance decision is immutable'); END;
+      CREATE TRIGGER user_guidance_decisions_no_delete BEFORE DELETE ON user_guidance_decisions BEGIN SELECT RAISE(ABORT, 'user guidance decision is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 23,
+    name: "m5c-temporary-context-and-translation-binding",
+    sql: `
+      CREATE TABLE temporary_context_revisions (
+        workspace_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'approved', 'rejected', 'canceled', 'stale')),
+        context_json TEXT NOT NULL CHECK(json_valid(context_json) AND json_type(context_json) = 'object'),
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, context_revision_id),
+        UNIQUE (workspace_id, workflow_id, revision),
+        UNIQUE (workspace_id, workflow_id, context_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TABLE temporary_context_heads (
+        workspace_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'pending-user', 'approved', 'rejected', 'canceled', 'stale')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, workflow_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE temporary_context_items (
+        workspace_id TEXT NOT NULL,
+        context_item_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        instruction_type TEXT NOT NULL CHECK(instruction_type IN ('hard-constraint', 'preferred', 'background', 'disputed', 'warning-only')),
+        source_type TEXT NOT NULL CHECK(source_type IN ('plan-item', 'research-claim', 'user-guidance')),
+        source_id TEXT NOT NULL,
+        source_digest TEXT NOT NULL CHECK(length(source_digest) = 71 AND substr(source_digest, 1, 7) = 'sha256:'),
+        segment_ids_json TEXT NOT NULL CHECK(json_valid(segment_ids_json) AND json_type(segment_ids_json) = 'array'),
+        content_json TEXT NOT NULL CHECK(json_valid(content_json) AND json_type(content_json) = 'object'),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        affirmative INTEGER NOT NULL CHECK(affirmative IN (0, 1)),
+        PRIMARY KEY (workspace_id, context_item_id),
+        UNIQUE (workspace_id, context_revision_id, context_item_id),
+        CHECK((instruction_type IN ('disputed', 'warning-only') AND affirmative = 0) OR instruction_type NOT IN ('disputed', 'warning-only')),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE context_use_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected', 'canceled')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, context_revision_id),
+        UNIQUE (workspace_id, workflow_id, context_revision_id, decision_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_translation_attempt_bindings (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        context_use_decision_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        flow_budget_reservation_id TEXT NOT NULL,
+        segment_context_digest TEXT NOT NULL CHECK(length(segment_context_digest) = 71 AND substr(segment_context_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, attempt_id),
+        UNIQUE (workspace_id, workflow_id, attempt_id),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id, context_use_decision_id)
+          REFERENCES context_use_decisions(workspace_id, workflow_id, context_revision_id, decision_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER temporary_context_revisions_no_update BEFORE UPDATE ON temporary_context_revisions BEGIN SELECT RAISE(ABORT, 'temporary context revision is immutable'); END;
+      CREATE TRIGGER temporary_context_revisions_no_delete BEFORE DELETE ON temporary_context_revisions BEGIN SELECT RAISE(ABORT, 'temporary context revision is immutable'); END;
+      CREATE TRIGGER temporary_context_items_no_update BEFORE UPDATE ON temporary_context_items BEGIN SELECT RAISE(ABORT, 'temporary context item is immutable'); END;
+      CREATE TRIGGER temporary_context_items_no_delete BEFORE DELETE ON temporary_context_items BEGIN SELECT RAISE(ABORT, 'temporary context item is immutable'); END;
+      CREATE TRIGGER context_use_decisions_no_update BEFORE UPDATE ON context_use_decisions BEGIN SELECT RAISE(ABORT, 'context use decision is immutable'); END;
+      CREATE TRIGGER context_use_decisions_no_delete BEFORE DELETE ON context_use_decisions BEGIN SELECT RAISE(ABORT, 'context use decision is immutable'); END;
+      CREATE TRIGGER m5c_translation_attempt_bindings_no_update BEFORE UPDATE ON m5c_translation_attempt_bindings BEGIN SELECT RAISE(ABORT, 'M5C attempt binding is immutable'); END;
+      CREATE TRIGGER m5c_translation_attempt_bindings_no_delete BEFORE DELETE ON m5c_translation_attempt_bindings BEGIN SELECT RAISE(ABORT, 'M5C attempt binding is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 24,
+    name: "m5c-target-revision-layered-qa",
+    sql: `
+      CREATE TABLE target_revision_snapshots (
+        workspace_id TEXT NOT NULL,
+        target_revision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        working_copy_digest TEXT NOT NULL CHECK(length(working_copy_digest) = 71 AND substr(working_copy_digest, 1, 7) = 'sha256:'),
+        parent_target_revision_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, target_revision_id),
+        UNIQUE (workspace_id, workflow_id, working_copy_digest),
+        UNIQUE (workspace_id, workflow_id, target_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id),
+        FOREIGN KEY (workspace_id, workflow_id, parent_target_revision_id)
+          REFERENCES target_revision_snapshots(workspace_id, workflow_id, target_revision_id)
+      ) STRICT;
+
+      CREATE TABLE target_revision_segments (
+        workspace_id TEXT NOT NULL,
+        target_revision_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        working_copy_revision_id TEXT NOT NULL,
+        text_digest TEXT NOT NULL CHECK(length(text_digest) = 71 AND substr(text_digest, 1, 7) = 'sha256:'),
+        PRIMARY KEY (workspace_id, target_revision_id, segment_id),
+        FOREIGN KEY (workspace_id, workflow_id, target_revision_id)
+          REFERENCES target_revision_snapshots(workspace_id, workflow_id, target_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, segment_id, working_copy_revision_id)
+          REFERENCES working_copy_revisions(workspace_id, workflow_id, segment_id, working_copy_revision_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_qa_runs (
+        workspace_id TEXT NOT NULL,
+        qa_run_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        target_revision_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed', 'unknown', 'canceled')),
+        scope TEXT NOT NULL CHECK(scope IN ('full', 'diff', 'deterministic-final')),
+        layers_json TEXT NOT NULL CHECK(json_valid(layers_json) AND json_type(layers_json) = 'array'),
+        rules_version TEXT NOT NULL,
+        model_json TEXT NOT NULL CHECK(json_valid(model_json) AND json_type(model_json) = 'object'),
+        run_digest TEXT NOT NULL CHECK(length(run_digest) = 71 AND substr(run_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, qa_run_id),
+        UNIQUE (workspace_id, workflow_id, qa_run_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_workflows(workspace_id, workflow_id),
+        FOREIGN KEY (workspace_id, workflow_id, target_revision_id)
+          REFERENCES target_revision_snapshots(workspace_id, workflow_id, target_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_qa_findings (
+        workspace_id TEXT NOT NULL,
+        finding_id TEXT NOT NULL,
+        qa_run_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        layer TEXT NOT NULL CHECK(layer IN ('invariant', 'heuristic', 'model')),
+        severity TEXT NOT NULL CHECK(severity IN ('error', 'warning', 'info')),
+        code TEXT NOT NULL,
+        segment_id TEXT,
+        blocking INTEGER NOT NULL CHECK(blocking IN (0, 1)),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        finding_digest TEXT NOT NULL CHECK(length(finding_digest) = 71 AND substr(finding_digest, 1, 7) = 'sha256:'),
+        PRIMARY KEY (workspace_id, finding_id),
+        UNIQUE (workspace_id, qa_run_id, finding_id),
+        CHECK((layer = 'invariant' AND severity = 'error' AND blocking = 1) OR NOT (layer = 'invariant' AND severity = 'error')),
+        FOREIGN KEY (workspace_id, workflow_id, qa_run_id) REFERENCES m5c_qa_runs(workspace_id, workflow_id, qa_run_id),
+        FOREIGN KEY (workspace_id, segment_id) REFERENCES document_segments(workspace_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_qa_dependencies (
+        workspace_id TEXT NOT NULL,
+        qa_run_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        dependency_type TEXT NOT NULL CHECK(dependency_type IN ('segment-revision', 'context-item', 'fact-revision', 'evidence')),
+        dependency_id TEXT NOT NULL,
+        dependency_digest TEXT NOT NULL CHECK(length(dependency_digest) = 71 AND substr(dependency_digest, 1, 7) = 'sha256:'),
+        segment_id TEXT,
+        PRIMARY KEY (workspace_id, qa_run_id, dependency_type, dependency_id),
+        FOREIGN KEY (workspace_id, workflow_id, qa_run_id) REFERENCES m5c_qa_runs(workspace_id, workflow_id, qa_run_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_qa_finding_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        qa_run_id TEXT NOT NULL,
+        finding_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('continue-research', 'add-guidance', 'accept-issue', 'retranslate', 'resolved')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, qa_run_id, finding_id),
+        FOREIGN KEY (workspace_id, qa_run_id, finding_id) REFERENCES m5c_qa_findings(workspace_id, qa_run_id, finding_id)
+      ) STRICT;
+
+      CREATE TABLE m5c_qa_stale_events (
+        workspace_id TEXT NOT NULL,
+        stale_event_id TEXT NOT NULL,
+        qa_run_id TEXT NOT NULL,
+        dependency_type TEXT NOT NULL,
+        dependency_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, stale_event_id),
+        UNIQUE (workspace_id, qa_run_id, dependency_type, dependency_id),
+        FOREIGN KEY (workspace_id, qa_run_id) REFERENCES m5c_qa_runs(workspace_id, qa_run_id)
+      ) STRICT;
+
+      CREATE TRIGGER working_copy_revision_stales_m5c_qa AFTER INSERT ON working_copy_revisions
+      BEGIN
+        INSERT OR IGNORE INTO m5c_qa_stale_events(workspace_id, stale_event_id, qa_run_id, dependency_type, dependency_id, reason, occurred_at)
+        SELECT dependency.workspace_id,
+          'edit:' || dependency.qa_run_id || ':' || NEW.working_copy_revision_id,
+          dependency.qa_run_id, 'segment-revision', NEW.working_copy_revision_id, 'target-segment-edited', NEW.created_at
+        FROM m5c_qa_dependencies dependency
+        WHERE dependency.workspace_id = NEW.workspace_id AND dependency.workflow_id = NEW.workflow_id
+          AND dependency.dependency_type = 'segment-revision' AND dependency.segment_id = NEW.segment_id;
+      END;
+
+      CREATE TRIGGER target_revision_snapshots_no_update BEFORE UPDATE ON target_revision_snapshots BEGIN SELECT RAISE(ABORT, 'target revision snapshot is immutable'); END;
+      CREATE TRIGGER target_revision_snapshots_no_delete BEFORE DELETE ON target_revision_snapshots BEGIN SELECT RAISE(ABORT, 'target revision snapshot is immutable'); END;
+      CREATE TRIGGER target_revision_segments_no_update BEFORE UPDATE ON target_revision_segments BEGIN SELECT RAISE(ABORT, 'target revision segment is immutable'); END;
+      CREATE TRIGGER target_revision_segments_no_delete BEFORE DELETE ON target_revision_segments BEGIN SELECT RAISE(ABORT, 'target revision segment is immutable'); END;
+      CREATE TRIGGER m5c_qa_runs_no_update BEFORE UPDATE ON m5c_qa_runs BEGIN SELECT RAISE(ABORT, 'M5C QA run is immutable'); END;
+      CREATE TRIGGER m5c_qa_runs_no_delete BEFORE DELETE ON m5c_qa_runs BEGIN SELECT RAISE(ABORT, 'M5C QA run is immutable'); END;
+      CREATE TRIGGER m5c_qa_findings_no_update BEFORE UPDATE ON m5c_qa_findings BEGIN SELECT RAISE(ABORT, 'M5C QA finding is immutable'); END;
+      CREATE TRIGGER m5c_qa_findings_no_delete BEFORE DELETE ON m5c_qa_findings BEGIN SELECT RAISE(ABORT, 'M5C QA finding is immutable'); END;
+      CREATE TRIGGER m5c_qa_dependencies_no_update BEFORE UPDATE ON m5c_qa_dependencies BEGIN SELECT RAISE(ABORT, 'M5C QA dependency is immutable'); END;
+      CREATE TRIGGER m5c_qa_dependencies_no_delete BEFORE DELETE ON m5c_qa_dependencies BEGIN SELECT RAISE(ABORT, 'M5C QA dependency is immutable'); END;
+      CREATE TRIGGER m5c_qa_finding_decisions_no_update BEFORE UPDATE ON m5c_qa_finding_decisions BEGIN SELECT RAISE(ABORT, 'M5C QA decision is immutable'); END;
+      CREATE TRIGGER m5c_qa_finding_decisions_no_delete BEFORE DELETE ON m5c_qa_finding_decisions BEGIN SELECT RAISE(ABORT, 'M5C QA decision is immutable'); END;
+      CREATE TRIGGER m5c_qa_stale_events_no_update BEFORE UPDATE ON m5c_qa_stale_events BEGIN SELECT RAISE(ABORT, 'M5C QA stale event is append-only'); END;
+      CREATE TRIGGER m5c_qa_stale_events_no_delete BEFORE DELETE ON m5c_qa_stale_events BEGIN SELECT RAISE(ABORT, 'M5C QA stale event is append-only'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 25,
+    name: "m5c-research-binding-and-context-disposition",
+    sql: `
+      CREATE TABLE m5c_research_bindings (
+        workspace_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        anchor_task_id TEXT NOT NULL,
+        origin_type TEXT NOT NULL CHECK(origin_type IN ('plan-item', 'qa-finding')),
+        origin_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, request_id),
+        UNIQUE (workspace_id, workflow_id, plan_revision_id, origin_type, origin_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES research_requests(workspace_id, request_id),
+        FOREIGN KEY (workspace_id, anchor_task_id)
+          REFERENCES translation_tasks(workspace_id, task_id),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id)
+      ) STRICT;
+
+      CREATE TABLE context_disposition_decisions (
+        workspace_id TEXT NOT NULL,
+        disposition_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        selected_item_ids_json TEXT NOT NULL CHECK(json_valid(selected_item_ids_json) AND json_type(selected_item_ids_json) = 'array'),
+        selected_digest TEXT NOT NULL CHECK(length(selected_digest) = 71 AND substr(selected_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, disposition_id),
+        UNIQUE (workspace_id, workflow_id, context_revision_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE context_persistence_proposals (
+        workspace_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        disposition_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        context_revision_id TEXT NOT NULL,
+        context_item_id TEXT NOT NULL,
+        proposed_source_json TEXT NOT NULL CHECK(json_valid(proposed_source_json) AND json_type(proposed_source_json) = 'object'),
+        proposed_source_digest TEXT NOT NULL CHECK(length(proposed_source_digest) = 71 AND substr(proposed_source_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_id),
+        UNIQUE (workspace_id, disposition_id, context_item_id),
+        FOREIGN KEY (workspace_id, disposition_id) REFERENCES context_disposition_decisions(workspace_id, disposition_id),
+        FOREIGN KEY (workspace_id, context_item_id) REFERENCES temporary_context_items(workspace_id, context_item_id),
+        FOREIGN KEY (workspace_id, workflow_id, context_revision_id)
+          REFERENCES temporary_context_revisions(workspace_id, workflow_id, context_revision_id)
+      ) STRICT;
+
+      CREATE TABLE context_persistence_proposal_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected')),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id) REFERENCES context_persistence_proposals(workspace_id, proposal_id)
+      ) STRICT;
+
+      CREATE TABLE context_persistence_proposal_applications (
+        workspace_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        fact_id TEXT NOT NULL,
+        fact_revision_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, application_id),
+        UNIQUE (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id) REFERENCES context_persistence_proposals(workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, decision_id) REFERENCES context_persistence_proposal_decisions(workspace_id, decision_id),
+        FOREIGN KEY (workspace_id, fact_id, fact_revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TRIGGER m5c_research_bindings_no_update BEFORE UPDATE ON m5c_research_bindings BEGIN SELECT RAISE(ABORT, 'M5C research binding is immutable'); END;
+      CREATE TRIGGER m5c_research_bindings_no_delete BEFORE DELETE ON m5c_research_bindings BEGIN SELECT RAISE(ABORT, 'M5C research binding is immutable'); END;
+      CREATE TRIGGER context_disposition_decisions_no_update BEFORE UPDATE ON context_disposition_decisions BEGIN SELECT RAISE(ABORT, 'context disposition decision is immutable'); END;
+      CREATE TRIGGER context_disposition_decisions_no_delete BEFORE DELETE ON context_disposition_decisions BEGIN SELECT RAISE(ABORT, 'context disposition decision is immutable'); END;
+      CREATE TRIGGER context_persistence_proposals_no_update BEFORE UPDATE ON context_persistence_proposals BEGIN SELECT RAISE(ABORT, 'context persistence proposal is immutable'); END;
+      CREATE TRIGGER context_persistence_proposals_no_delete BEFORE DELETE ON context_persistence_proposals BEGIN SELECT RAISE(ABORT, 'context persistence proposal is immutable'); END;
+      CREATE TRIGGER context_persistence_proposal_decisions_no_update BEFORE UPDATE ON context_persistence_proposal_decisions BEGIN SELECT RAISE(ABORT, 'context persistence proposal decision is immutable'); END;
+      CREATE TRIGGER context_persistence_proposal_decisions_no_delete BEFORE DELETE ON context_persistence_proposal_decisions BEGIN SELECT RAISE(ABORT, 'context persistence proposal decision is immutable'); END;
+      CREATE TRIGGER context_persistence_proposal_applications_no_update BEFORE UPDATE ON context_persistence_proposal_applications BEGIN SELECT RAISE(ABORT, 'context persistence proposal application is immutable'); END;
+      CREATE TRIGGER context_persistence_proposal_applications_no_delete BEFORE DELETE ON context_persistence_proposal_applications BEGIN SELECT RAISE(ABORT, 'context persistence proposal application is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 26,
+    name: "m5c-cross-budget-research-operation-binding",
+    sql: `
+      CREATE TABLE m5c_research_operations (
+        workspace_id TEXT NOT NULL,
+        reservation_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('search', 'fetch', 'research')),
+        operation_digest TEXT NOT NULL CHECK(length(operation_digest) = 71 AND substr(operation_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, reservation_id),
+        UNIQUE (workspace_id, query_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES m5c_research_bindings(workspace_id, request_id),
+        FOREIGN KEY (workspace_id, run_id) REFERENCES research_runs(workspace_id, run_id),
+        FOREIGN KEY (workspace_id, query_id) REFERENCES research_queries(workspace_id, query_id),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TABLE translation_flow_recovery_decisions (
+        workspace_id TEXT NOT NULL,
+        recovery_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        paused_version INTEGER NOT NULL CHECK(paused_version >= 0),
+        action TEXT NOT NULL CHECK(action IN ('continue-local', 'retry', 'terminate')),
+        pause_reason TEXT NOT NULL,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, recovery_id),
+        UNIQUE (workspace_id, workflow_id, paused_version),
+        FOREIGN KEY (workspace_id, workflow_id) REFERENCES translation_flow_controls(workspace_id, workflow_id)
+      ) STRICT;
+
+      CREATE TRIGGER m5c_research_operations_no_update BEFORE UPDATE ON m5c_research_operations BEGIN SELECT RAISE(ABORT, 'M5C research operation binding is immutable'); END;
+      CREATE TRIGGER m5c_research_operations_no_delete BEFORE DELETE ON m5c_research_operations BEGIN SELECT RAISE(ABORT, 'M5C research operation binding is immutable'); END;
+      CREATE TRIGGER translation_flow_recovery_decisions_no_update BEFORE UPDATE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
+      CREATE TRIGGER translation_flow_recovery_decisions_no_delete BEFORE DELETE ON translation_flow_recovery_decisions BEGIN SELECT RAISE(ABORT, 'translation flow recovery decision is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 27,
+    name: "m5c-candidate-knowledge-needs",
+    sql: `
+      CREATE TABLE candidate_knowledge_needs (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        source_revision_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        attempt_id TEXT,
+        plan_revision_id TEXT NOT NULL,
+        context_revision_id TEXT,
+        context_digest TEXT NOT NULL CHECK(length(context_digest) = 71 AND substr(context_digest, 1, 7) = 'sha256:'),
+        origin_type TEXT NOT NULL CHECK(origin_type IN ('plan-item', 'translation-attempt')),
+        origin_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('term', 'entity', 'fact', 'relation', 'measurement')),
+        impact TEXT NOT NULL CHECK(impact IN ('critical', 'high', 'medium', 'low')),
+        question TEXT NOT NULL CHECK(length(question) BETWEEN 1 AND 512),
+        question_digest TEXT NOT NULL CHECK(length(question_digest) = 71 AND substr(question_digest, 1, 7) = 'sha256:'),
+        related_segment_ids_json TEXT NOT NULL CHECK(json_valid(related_segment_ids_json) AND json_type(related_segment_ids_json) = 'array'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, workflow_id, plan_revision_id, context_digest, question_digest),
+        FOREIGN KEY (workspace_id, workflow_id, plan_revision_id)
+          REFERENCES translation_context_plan_revisions(workspace_id, workflow_id, plan_revision_id),
+        FOREIGN KEY (workspace_id, attempt_id) REFERENCES translation_attempts(workspace_id, attempt_id),
+        FOREIGN KEY (workspace_id, segment_id) REFERENCES document_segments(workspace_id, segment_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_decisions (
+        workspace_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('research', 'guidance', 'proceed-with-risk')),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, decision_id),
+        UNIQUE (workspace_id, need_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_plan_bindings (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        plan_revision_id TEXT NOT NULL,
+        plan_item_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, plan_revision_id, plan_item_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id),
+        FOREIGN KEY (workspace_id, plan_revision_id, plan_item_id)
+          REFERENCES translation_context_plan_items(workspace_id, plan_revision_id, item_id)
+      ) STRICT;
+
+      CREATE TABLE candidate_knowledge_need_research_bindings (
+        workspace_id TEXT NOT NULL,
+        need_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, need_id),
+        UNIQUE (workspace_id, request_id),
+        FOREIGN KEY (workspace_id, need_id) REFERENCES candidate_knowledge_needs(workspace_id, need_id),
+        FOREIGN KEY (workspace_id, request_id) REFERENCES m5c_research_bindings(workspace_id, request_id)
+      ) STRICT;
+
+      CREATE TRIGGER candidate_knowledge_needs_no_update BEFORE UPDATE ON candidate_knowledge_needs BEGIN SELECT RAISE(ABORT, 'candidate knowledge need is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_needs_no_delete BEFORE DELETE ON candidate_knowledge_needs BEGIN SELECT RAISE(ABORT, 'candidate knowledge need is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_decisions_no_update BEFORE UPDATE ON candidate_knowledge_need_decisions BEGIN SELECT RAISE(ABORT, 'candidate knowledge need decision is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_decisions_no_delete BEFORE DELETE ON candidate_knowledge_need_decisions BEGIN SELECT RAISE(ABORT, 'candidate knowledge need decision is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_plan_bindings_no_update BEFORE UPDATE ON candidate_knowledge_need_plan_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need plan binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_plan_bindings_no_delete BEFORE DELETE ON candidate_knowledge_need_plan_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need plan binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_research_bindings_no_update BEFORE UPDATE ON candidate_knowledge_need_research_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need research binding is immutable'); END;
+      CREATE TRIGGER candidate_knowledge_need_research_bindings_no_delete BEFORE DELETE ON candidate_knowledge_need_research_bindings BEGIN SELECT RAISE(ABORT, 'candidate knowledge need research binding is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 28,
+    name: "direct-research-fetch-snapshots",
+    sql: `
+      CREATE TABLE research_direct_fetch_snapshots (
+        workspace_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        query_id TEXT NOT NULL,
+        requested_url TEXT NOT NULL CHECK(length(requested_url) BETWEEN 1 AND 4096),
+        final_url TEXT NOT NULL CHECK(length(final_url) BETWEEN 1 AND 4096),
+        fetched_at TEXT NOT NULL,
+        fetch_policy_version TEXT NOT NULL CHECK(length(fetch_policy_version) BETWEEN 1 AND 128),
+        status_code INTEGER NOT NULL CHECK(status_code BETWEEN 200 AND 299),
+        mime_type TEXT NOT NULL CHECK(mime_type IN ('text/html', 'text/plain')),
+        title TEXT NOT NULL CHECK(length(title) <= 2048),
+        extracted_text TEXT NOT NULL CHECK(length(extracted_text) BETWEEN 1 AND 262144),
+        content_digest TEXT NOT NULL CHECK(length(content_digest) = 71 AND substr(content_digest, 1, 7) = 'sha256:'),
+        snapshot_digest TEXT NOT NULL CHECK(length(snapshot_digest) = 71 AND substr(snapshot_digest, 1, 7) = 'sha256:'),
+        truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
+        diagnostics_json TEXT NOT NULL CHECK(json_valid(diagnostics_json) AND json_type(diagnostics_json) = 'array'),
+        redirects_json TEXT NOT NULL CHECK(json_valid(redirects_json) AND json_type(redirects_json) = 'array'),
+        untrusted INTEGER NOT NULL CHECK(untrusted = 1),
+        PRIMARY KEY (workspace_id, snapshot_id),
+        UNIQUE (workspace_id, run_id, snapshot_id),
+        UNIQUE (workspace_id, run_id, query_id, snapshot_digest),
+        FOREIGN KEY (workspace_id, run_id, query_id) REFERENCES research_queries(workspace_id, run_id, query_id)
+      ) STRICT;
+
+      CREATE TRIGGER research_direct_fetch_snapshots_no_update BEFORE UPDATE ON research_direct_fetch_snapshots
+      BEGIN SELECT RAISE(ABORT, 'direct research fetch snapshot is immutable'); END;
+      CREATE TRIGGER research_direct_fetch_snapshots_no_delete BEFORE DELETE ON research_direct_fetch_snapshots
+      BEGIN SELECT RAISE(ABORT, 'direct research fetch snapshot is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 29,
+    name: "generic-knowledge-proposal-evidence-origin",
+    foreignKeysOff: true,
+    sql: `
+      DROP TRIGGER knowledge_proposals_no_update;
+      DROP TRIGGER knowledge_proposals_no_delete;
+      DROP TRIGGER knowledge_proposal_revisions_no_update;
+      DROP TRIGGER knowledge_proposal_revisions_no_delete;
+      DROP TRIGGER knowledge_proposal_heads_no_delete;
+      DROP TRIGGER knowledge_proposal_heads_update_guard;
+      DROP TRIGGER knowledge_proposal_decisions_no_update;
+      DROP TRIGGER knowledge_proposal_decisions_no_delete;
+      DROP TRIGGER knowledge_proposal_applications_no_update;
+      DROP TRIGGER knowledge_proposal_applications_no_delete;
+      DROP TRIGGER knowledge_proposal_research_evidence_no_update;
+      DROP TRIGGER knowledge_proposal_research_evidence_no_delete;
+      DROP INDEX knowledge_proposal_decision_scope;
+
+      ALTER TABLE knowledge_proposal_research_evidence RENAME TO knowledge_proposal_research_evidence_v22;
+      ALTER TABLE knowledge_proposal_applications RENAME TO knowledge_proposal_applications_v22;
+      ALTER TABLE knowledge_proposal_decisions RENAME TO knowledge_proposal_decisions_v22;
+      ALTER TABLE knowledge_proposal_heads RENAME TO knowledge_proposal_heads_v22;
+      ALTER TABLE knowledge_proposal_revisions RENAME TO knowledge_proposal_revisions_v22;
+      ALTER TABLE knowledge_proposals RENAME TO knowledge_proposals_v22;
+
+      CREATE TABLE knowledge_proposals (
+        workspace_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        origin_kind TEXT NOT NULL CHECK(origin_kind IN ('legacy-investigation', 'research-run')),
+        investigation_id TEXT,
+        research_run_id TEXT,
+        workflow_id TEXT NOT NULL,
+        segment_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_id),
+        UNIQUE (workspace_id, investigation_id, proposal_id),
+        UNIQUE (workspace_id, research_run_id, proposal_id),
+        CHECK((origin_kind = 'legacy-investigation' AND investigation_id IS NOT NULL AND research_run_id IS NULL)
+          OR (origin_kind = 'research-run' AND investigation_id IS NULL AND research_run_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, investigation_id, workflow_id, segment_id)
+          REFERENCES internet_investigations(workspace_id, investigation_id, workflow_id, segment_id),
+        FOREIGN KEY (workspace_id, research_run_id) REFERENCES research_runs(workspace_id, run_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_revisions (
+        workspace_id TEXT NOT NULL,
+        proposal_revision_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('legacy-fetch', 'direct-fetch')),
+        investigation_id TEXT,
+        fetch_snapshot_id TEXT,
+        research_run_id TEXT,
+        direct_snapshot_id TEXT,
+        version INTEGER NOT NULL CHECK(version >= 1),
+        operation TEXT NOT NULL CHECK(operation IN ('create', 'revise')),
+        fact_id TEXT NOT NULL,
+        base_fact_revision_id TEXT,
+        proposed_source_json TEXT NOT NULL CHECK(json_valid(proposed_source_json) AND json_type(proposed_source_json) = 'object'),
+        proposed_source_digest TEXT NOT NULL CHECK(length(proposed_source_digest) = 71 AND substr(proposed_source_digest, 1, 7) = 'sha256:'),
+        proposal_policy_version TEXT NOT NULL,
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('user', 'system', 'fixture')),
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_revision_id),
+        UNIQUE (workspace_id, proposal_id, version),
+        UNIQUE (workspace_id, proposal_id, proposal_revision_id),
+        CHECK((operation = 'create' AND base_fact_revision_id IS NULL) OR (operation = 'revise' AND base_fact_revision_id IS NOT NULL)),
+        CHECK((evidence_kind = 'legacy-fetch' AND investigation_id IS NOT NULL AND fetch_snapshot_id IS NOT NULL
+          AND research_run_id IS NULL AND direct_snapshot_id IS NULL)
+          OR (evidence_kind = 'direct-fetch' AND investigation_id IS NULL AND fetch_snapshot_id IS NULL
+          AND research_run_id IS NOT NULL AND direct_snapshot_id IS NOT NULL)),
+        FOREIGN KEY (workspace_id, proposal_id) REFERENCES knowledge_proposals(workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, investigation_id, fetch_snapshot_id)
+          REFERENCES internet_fetch_snapshots(workspace_id, investigation_id, fetch_snapshot_id),
+        FOREIGN KEY (workspace_id, research_run_id, direct_snapshot_id)
+          REFERENCES research_direct_fetch_snapshots(workspace_id, run_id, snapshot_id),
+        FOREIGN KEY (workspace_id, fact_id, base_fact_revision_id)
+          REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_heads (
+        workspace_id TEXT NOT NULL, proposal_id TEXT NOT NULL, proposal_revision_id TEXT NOT NULL,
+        revision_version INTEGER NOT NULL CHECK(revision_version >= 1), version INTEGER NOT NULL CHECK(version >= 0),
+        state TEXT NOT NULL CHECK(state IN ('draft', 'approved', 'rejected')), updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_decisions (
+        workspace_id TEXT NOT NULL, decision_id TEXT NOT NULL, proposal_id TEXT NOT NULL, proposal_revision_id TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected')), actor_type TEXT NOT NULL CHECK(actor_type = 'user'),
+        actor_id TEXT NOT NULL, decided_at TEXT NOT NULL, PRIMARY KEY (workspace_id, decision_id), UNIQUE (workspace_id, proposal_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id)
+      ) STRICT;
+      CREATE UNIQUE INDEX knowledge_proposal_decision_scope
+        ON knowledge_proposal_decisions(workspace_id, decision_id, proposal_id, proposal_revision_id);
+
+      CREATE TABLE knowledge_proposal_applications (
+        workspace_id TEXT NOT NULL, application_id TEXT NOT NULL, proposal_id TEXT NOT NULL, proposal_revision_id TEXT NOT NULL,
+        decision_id TEXT NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('create', 'revise')), fact_id TEXT NOT NULL,
+        fact_revision_id TEXT NOT NULL, proposed_source_digest TEXT NOT NULL CHECK(length(proposed_source_digest) = 71 AND substr(proposed_source_digest, 1, 7) = 'sha256:'),
+        actor_type TEXT NOT NULL CHECK(actor_type = 'user'), actor_id TEXT NOT NULL, applied_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, application_id), UNIQUE (workspace_id, proposal_id), UNIQUE (workspace_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_revisions(workspace_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, decision_id, proposal_id, proposal_revision_id)
+          REFERENCES knowledge_proposal_decisions(workspace_id, decision_id, proposal_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, fact_id, fact_revision_id) REFERENCES knowledge_fact_revisions(workspace_id, fact_id, revision_id)
+      ) STRICT;
+
+      CREATE TABLE knowledge_proposal_research_evidence (
+        workspace_id TEXT NOT NULL, proposal_revision_id TEXT NOT NULL, report_id TEXT NOT NULL,
+        claim_id TEXT NOT NULL, citation_id TEXT NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        PRIMARY KEY (workspace_id, proposal_revision_id, claim_id, citation_id), UNIQUE (workspace_id, proposal_revision_id, ordinal),
+        FOREIGN KEY (workspace_id, proposal_revision_id) REFERENCES knowledge_proposal_revisions(workspace_id, proposal_revision_id),
+        FOREIGN KEY (workspace_id, report_id, claim_id) REFERENCES research_report_claims(workspace_id, report_id, claim_id),
+        FOREIGN KEY (workspace_id, claim_id, citation_id) REFERENCES research_claim_citations(workspace_id, claim_id, citation_id)
+      ) STRICT;
+
+      INSERT INTO knowledge_proposals
+        SELECT workspace_id, proposal_id, 'legacy-investigation', investigation_id, NULL, workflow_id, segment_id, created_at
+        FROM knowledge_proposals_v22;
+      INSERT INTO knowledge_proposal_revisions
+        SELECT workspace_id, proposal_revision_id, proposal_id, 'legacy-fetch', investigation_id, fetch_snapshot_id, NULL, NULL,
+          version, operation, fact_id, base_fact_revision_id, proposed_source_json, proposed_source_digest,
+          proposal_policy_version, actor_type, actor_id, created_at FROM knowledge_proposal_revisions_v22;
+      INSERT INTO knowledge_proposal_heads SELECT * FROM knowledge_proposal_heads_v22;
+      INSERT INTO knowledge_proposal_decisions SELECT * FROM knowledge_proposal_decisions_v22;
+      INSERT INTO knowledge_proposal_applications SELECT * FROM knowledge_proposal_applications_v22;
+      INSERT INTO knowledge_proposal_research_evidence SELECT * FROM knowledge_proposal_research_evidence_v22;
+
+      DROP TABLE knowledge_proposal_research_evidence_v22;
+      DROP TABLE knowledge_proposal_applications_v22;
+      DROP TABLE knowledge_proposal_decisions_v22;
+      DROP TABLE knowledge_proposal_heads_v22;
+      DROP TABLE knowledge_proposal_revisions_v22;
+      DROP TABLE knowledge_proposals_v22;
+
+      CREATE TRIGGER knowledge_proposals_no_update BEFORE UPDATE ON knowledge_proposals BEGIN SELECT RAISE(ABORT, 'knowledge proposal is immutable'); END;
+      CREATE TRIGGER knowledge_proposals_no_delete BEFORE DELETE ON knowledge_proposals BEGIN SELECT RAISE(ABORT, 'knowledge proposal is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_revisions_no_update BEFORE UPDATE ON knowledge_proposal_revisions BEGIN SELECT RAISE(ABORT, 'knowledge proposal revision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_revisions_no_delete BEFORE DELETE ON knowledge_proposal_revisions BEGIN SELECT RAISE(ABORT, 'knowledge proposal revision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_heads_no_delete BEFORE DELETE ON knowledge_proposal_heads BEGIN SELECT RAISE(ABORT, 'knowledge proposal head is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_heads_update_guard BEFORE UPDATE ON knowledge_proposal_heads
+      WHEN NEW.version <> OLD.version + 1 OR NOT (
+        (OLD.state = 'draft' AND NEW.state = 'draft' AND NEW.proposal_revision_id <> OLD.proposal_revision_id AND NEW.revision_version = OLD.revision_version + 1) OR
+        (OLD.state = 'draft' AND NEW.state IN ('approved', 'rejected') AND NEW.proposal_revision_id = OLD.proposal_revision_id AND NEW.revision_version = OLD.revision_version))
+      BEGIN SELECT RAISE(ABORT, 'invalid knowledge proposal head update'); END;
+      CREATE TRIGGER knowledge_proposal_decisions_no_update BEFORE UPDATE ON knowledge_proposal_decisions BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_decisions_no_delete BEFORE DELETE ON knowledge_proposal_decisions BEGIN SELECT RAISE(ABORT, 'knowledge proposal decision is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_applications_no_update BEFORE UPDATE ON knowledge_proposal_applications BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_applications_no_delete BEFORE DELETE ON knowledge_proposal_applications BEGIN SELECT RAISE(ABORT, 'knowledge proposal application is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_research_evidence_no_update BEFORE UPDATE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
+      CREATE TRIGGER knowledge_proposal_research_evidence_no_delete BEFORE DELETE ON knowledge_proposal_research_evidence BEGIN SELECT RAISE(ABORT, 'proposal research evidence is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 30,
+    name: "translation-reference-tools",
+    sql: `
+      CREATE TABLE translation_tool_configurations (
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        schema_version TEXT NOT NULL CHECK(schema_version = 'translation-tool-configuration-v1'),
+        configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json) AND json_type(configuration_json) = 'object'),
+        configuration_digest TEXT NOT NULL CHECK(length(configuration_digest) = 71 AND substr(configuration_digest, 1, 7) = 'sha256:'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id),
+        UNIQUE (workspace_id, task_id, configuration_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tasks(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE translation_calculation_receipts (
+        workspace_id TEXT NOT NULL,
+        receipt_digest TEXT NOT NULL CHECK(length(receipt_digest) = 71 AND substr(receipt_digest, 1, 7) = 'sha256:'),
+        task_id TEXT NOT NULL,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+        receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json) AND json_type(receipt_json) = 'object'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, receipt_digest),
+        UNIQUE (workspace_id, task_id, request_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tool_configurations(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE translation_reference_cache_entries (
+        workspace_id TEXT NOT NULL,
+        cache_entry_digest TEXT NOT NULL CHECK(length(cache_entry_digest) = 71 AND substr(cache_entry_digest, 1, 7) = 'sha256:'),
+        task_id TEXT NOT NULL,
+        tool_kind TEXT NOT NULL CHECK(tool_kind IN ('dictionary', 'entity')),
+        provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 128),
+        provider_version TEXT NOT NULL CHECK(length(provider_version) BETWEEN 1 AND 128),
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        request_json TEXT NOT NULL CHECK(json_valid(request_json) AND json_type(request_json) = 'object'),
+        result_digest TEXT NOT NULL CHECK(length(result_digest) = 71 AND substr(result_digest, 1, 7) = 'sha256:'),
+        result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, task_id, cache_entry_digest),
+        UNIQUE (workspace_id, task_id, tool_kind, provider_id, provider_version, request_digest),
+        FOREIGN KEY (workspace_id, task_id) REFERENCES translation_tool_configurations(workspace_id, task_id)
+      ) STRICT;
+
+      CREATE TRIGGER translation_tool_configurations_no_update BEFORE UPDATE ON translation_tool_configurations
+      BEGIN SELECT RAISE(ABORT, 'translation tool configuration is immutable'); END;
+      CREATE TRIGGER translation_tool_configurations_no_delete BEFORE DELETE ON translation_tool_configurations
+      BEGIN SELECT RAISE(ABORT, 'translation tool configuration is immutable'); END;
+      CREATE TRIGGER translation_calculation_receipts_no_update BEFORE UPDATE ON translation_calculation_receipts
+      BEGIN SELECT RAISE(ABORT, 'translation calculation receipt is immutable'); END;
+      CREATE TRIGGER translation_calculation_receipts_no_delete BEFORE DELETE ON translation_calculation_receipts
+      BEGIN SELECT RAISE(ABORT, 'translation calculation receipt is immutable'); END;
+      CREATE TRIGGER translation_reference_cache_entries_no_update BEFORE UPDATE ON translation_reference_cache_entries
+      BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
+      CREATE TRIGGER translation_reference_cache_entries_no_delete BEFORE DELETE ON translation_reference_cache_entries
+      BEGIN SELECT RAISE(ABORT, 'translation reference cache entry is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 31,
+    name: "agent-runtime-minimal-ledger",
+    sql: `
+      CREATE TABLE agent_runtime_calls (
+        workspace_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        call_sequence INTEGER NOT NULL CHECK(call_sequence BETWEEN 1 AND 64),
+        turn_ordinal INTEGER NOT NULL CHECK(turn_ordinal BETWEEN 1 AND 5),
+        kind TEXT NOT NULL CHECK(kind IN ('provider', 'remote-tool', 'local-tool')),
+        name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 128),
+        tool_call_id TEXT,
+        request_digest TEXT NOT NULL CHECK(length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'),
+        budget_reservation_id TEXT,
+        started_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, call_id),
+        UNIQUE (workspace_id, attempt_id, call_sequence),
+        UNIQUE (workspace_id, attempt_id, tool_call_id),
+        CHECK((kind = 'provider' AND tool_call_id IS NULL) OR (kind IN ('remote-tool', 'local-tool') AND tool_call_id IS NOT NULL)),
+        CHECK((kind IN ('provider', 'remote-tool') AND budget_reservation_id IS NOT NULL) OR (kind = 'local-tool' AND budget_reservation_id IS NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE TABLE agent_runtime_outcomes (
+        workspace_id TEXT NOT NULL,
+        outcome_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('completed', 'released', 'unknown', 'canceled')),
+        result_digest TEXT,
+        receipt_digest TEXT,
+        usage_json TEXT CHECK(usage_json IS NULL OR (json_valid(usage_json) AND json_type(usage_json) = 'object')),
+        details_json TEXT NOT NULL CHECK(json_valid(details_json) AND json_type(details_json) = 'object'),
+        completed_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, outcome_id),
+        UNIQUE (workspace_id, call_id),
+        CHECK((outcome = 'completed' AND result_digest IS NOT NULL) OR (outcome <> 'completed' AND result_digest IS NULL AND receipt_digest IS NULL)),
+        FOREIGN KEY (workspace_id, call_id)
+          REFERENCES agent_runtime_calls(workspace_id, call_id),
+        FOREIGN KEY (workspace_id, attempt_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id)
+      ) STRICT;
+
+      CREATE TABLE agent_runtime_checkpoints (
+        workspace_id TEXT NOT NULL,
+        checkpoint_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 5),
+        kind TEXT NOT NULL CHECK(kind IN ('turn', 'final')),
+        transcript_json TEXT NOT NULL CHECK(json_valid(transcript_json) AND json_type(transcript_json) = 'array'),
+        transcript_digest TEXT NOT NULL CHECK(length(transcript_digest) = 71 AND substr(transcript_digest, 1, 7) = 'sha256:'),
+        final_json TEXT CHECK(final_json IS NULL OR (json_valid(final_json) AND json_type(final_json) = 'object')),
+        final_digest TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, checkpoint_id),
+        UNIQUE (workspace_id, attempt_id, kind, ordinal),
+        CHECK((kind = 'turn' AND final_json IS NULL AND final_digest IS NULL) OR (kind = 'final' AND final_json IS NOT NULL AND final_digest IS NOT NULL)),
+        FOREIGN KEY (workspace_id, attempt_id, task_id)
+          REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX one_agent_final_per_attempt
+        ON agent_runtime_checkpoints(workspace_id, attempt_id) WHERE kind = 'final';
+      CREATE INDEX agent_open_calls
+        ON agent_runtime_calls(workspace_id, attempt_id, call_sequence);
+
+      CREATE TRIGGER agent_runtime_calls_no_update BEFORE UPDATE ON agent_runtime_calls
+      BEGIN SELECT RAISE(ABORT, 'agent runtime call is immutable'); END;
+      CREATE TRIGGER agent_runtime_calls_no_delete BEFORE DELETE ON agent_runtime_calls
+      BEGIN SELECT RAISE(ABORT, 'agent runtime call is immutable'); END;
+      CREATE TRIGGER agent_runtime_outcomes_no_update BEFORE UPDATE ON agent_runtime_outcomes
+      BEGIN SELECT RAISE(ABORT, 'agent runtime outcome is immutable'); END;
+      CREATE TRIGGER agent_runtime_outcomes_no_delete BEFORE DELETE ON agent_runtime_outcomes
+      BEGIN SELECT RAISE(ABORT, 'agent runtime outcome is immutable'); END;
+      CREATE TRIGGER agent_runtime_checkpoints_no_update BEFORE UPDATE ON agent_runtime_checkpoints
+      BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
+      CREATE TRIGGER agent_runtime_checkpoints_no_delete BEFORE DELETE ON agent_runtime_checkpoints
+      BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
+    `,
+  }),
 ]);
 
 export function migrationChecksum(migration) {
@@ -2470,7 +3508,6 @@ export function migrationChecksum(migration) {
     .update(`${migration.version}\n${migration.name}\n${migration.sql}${migration.foreignKeysOff ? "\nforeign-keys-off" : ""}`, "utf8")
     .digest("hex");
 }
-
 export function applyMigrations(database, { inject = () => {} } = {}) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

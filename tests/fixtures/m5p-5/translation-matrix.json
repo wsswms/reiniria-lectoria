@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "m5p-translation-matrix-v1",
+  "directions": [
+    { "id": "ja-zh", "sourceLanguage": "ja", "targetLanguage": "zh-CN", "source": "焦点距離は50mmです。", "expected": "焦距为50毫米。" },
+    { "id": "zh-ja", "sourceLanguage": "zh-CN", "targetLanguage": "ja", "source": "焦距为50毫米。", "expected": "焦点距離は50ミリメートルです。" },
+    { "id": "en-zh", "sourceLanguage": "en", "targetLanguage": "zh-CN", "source": "The focal length is 50 mm.", "expected": "焦距为50毫米。" },
+    { "id": "zh-en", "sourceLanguage": "zh-CN", "targetLanguage": "en", "source": "焦距为50毫米。", "expected": "The focal length is 50 mm." }
+  ],
+  "modes": ["tools-disabled", "tools-enabled"]
+}

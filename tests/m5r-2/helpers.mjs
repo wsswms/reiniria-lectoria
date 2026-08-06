@@ -13,16 +13,18 @@ export const user = Object.freeze({ type: "user", id: "m5r-2-user" });
 export const model = Object.freeze({ type: "model", id: "m5r-2-gap-detector" });
 export const system = Object.freeze({ type: "system", id: "m5r-2-control-plane" });
 
-export async function researchWorkspace({ limits = {}, providerBudgets = {}, adapterOverrides = {}, searchProviderId = "fake-search" } = {}) {
+export async function researchWorkspace({ limits = {}, providerBudgets = {}, adapterOverrides = {}, searchProviderId = "fake-search",
+  modelProviderId = "fake-research-model", questions = ["What is the authoritative product term?"],
+  allowedLanguages = ["en", "zh-CN"], startMilliseconds = 0 } = {}) {
   const setup = await evidenceWorkspace();
   const bound = enqueueEvidence(setup, capture(setup), randomUUID());
-  let milliseconds = 0;
+  let milliseconds = startMilliseconds;
   const now = () => new Date(milliseconds);
   const foundation = new ResearchFoundationService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const request = { schemaVersion: "1.0", requestId: randomUUID(), revisionId: randomUUID(), taskId: bound.task.task.task_id,
     workflowId: setup.workflow.workflowId, documentId: setup.workflow.documentId, sourceRevisionId: setup.workflow.sourceRevisionId,
     targetLanguage: setup.workflow.targetLanguage, segmentIds: [setup.workflow.segmentId], gapKinds: ["term"],
-    questions: ["What is the authoritative product term?"], localEvidenceDigest: sha("local-evidence"), origin: model, createdAt: now().toISOString() };
+    questions, localEvidenceDigest: sha("local-evidence"), origin: model, createdAt: now().toISOString() };
   foundation.createRequest(request, model);
   foundation.submitRequest(request.requestId, 0, model);
   foundation.decideRequest(request.requestId, 1, "approved", user);
@@ -32,11 +34,11 @@ export async function researchWorkspace({ limits = {}, providerBudgets = {}, ada
         budget: { maxSearchCalls: 12, maxContentUrls: 0, maxModelTokens: 0, maxCostMicrosUsd: 0, ...providerBudgets[searchProviderId] } },
       { capability: "extract", providerId: "fake-content", fallbackOrder: 0,
         budget: { maxSearchCalls: 0, maxContentUrls: 16, maxModelTokens: 0, maxCostMicrosUsd: 0, ...providerBudgets["fake-content"] } },
-      { capability: "research-model", providerId: "fake-research-model", fallbackOrder: 0,
-        budget: { maxSearchCalls: 0, maxContentUrls: 0, maxModelTokens: 100_000, maxCostMicrosUsd: 0, ...providerBudgets["fake-research-model"] } },
+      { capability: "research-model", providerId: modelProviderId, fallbackOrder: 0,
+        budget: { maxSearchCalls: 0, maxContentUrls: 0, maxModelTokens: 100_000, maxCostMicrosUsd: 0, ...providerBudgets[modelProviderId] } },
     ], limits: { maxRounds: 5, maxSearchCalls: 12, maxResultsPerSearch: 10, maxContentUrls: 16, maxDurationSeconds: 1_800,
       maxRuns: 2, maxModelTokens: 100_000, maxCostMicrosUsd: 0, ...limits }, allowedDomains: ["official.example", "independent.example"],
-    allowedLanguages: ["en", "zh-CN"], approvedBy: user, approvedAt: now().toISOString(), expiresAt: new Date(1_800_000).toISOString() };
+    allowedLanguages, approvedBy: user, approvedAt: now().toISOString(), expiresAt: new Date(milliseconds + 1_800_000).toISOString() };
   const issued = foundation.issueGrant(request.requestId, grantInput, user);
   const runs = new ResearchRunService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const run = runs.create(issued.grant.grantId, sha("research-run"), system);
@@ -53,7 +55,7 @@ export async function researchWorkspace({ limits = {}, providerBudgets = {}, ada
   const budgets = new ResearchBudgetService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const evidence = new ResearchEvidenceService(setup.fixture.database, setup.fixture.workspaceId, { now });
   const capabilities = new ResearchCapabilityService(setup.fixture.database, setup.fixture.workspaceId, { key: Buffer.alloc(32, 9), now });
-  const adapters = new Map([[searchProviderId, search], ["fake-content", content], ["fake-research-model", researchModel]]);
+  const adapters = new Map([[searchProviderId, search], ["fake-content", content], [modelProviderId, researchModel]]);
   const gateway = new ResearchToolGateway(setup.fixture.database, setup.fixture.workspaceId, { capabilities, budgets, evidence, adapters, now });
   return { setup, bound, now, advance(amount) { milliseconds += amount; }, foundation, request, grant: issued.grant, runs,
     run: runs.get(run.runId), search, content, researchModel, budgets, evidence, capabilities, gateway,

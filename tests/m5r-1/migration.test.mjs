@@ -86,8 +86,15 @@ function seedLegacyM5(database, workspaceId) {
     "knowledge_proposals", "knowledge_proposal_revisions", "knowledge_proposal_heads", "knowledge_proposal_decisions", "knowledge_proposal_applications"];
 }
 
-function tableDigests(database, tables) {
-  return Object.fromEntries(tables.map((table) => [table, sha(stableJson(database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))]));
+function legacyM5Digests(database, tables) {
+  const projections = {
+    knowledge_proposals: "workspace_id, proposal_id, investigation_id, workflow_id, segment_id, created_at",
+    knowledge_proposal_revisions: `workspace_id, proposal_revision_id, proposal_id, investigation_id, fetch_snapshot_id,
+      version, operation, fact_id, base_fact_revision_id, proposed_source_json, proposed_source_digest,
+      proposal_policy_version, actor_type, actor_id, created_at`,
+  };
+  return Object.fromEntries(tables.map((table) => [table, sha(stableJson(database.prepare(
+    `SELECT ${projections[table] ?? "*"} FROM ${table} ORDER BY rowid`).all()))]));
 }
 
 test(`schemas v1 through v${CURRENT_SCHEMA_VERSION - 1} migrate to v${CURRENT_SCHEMA_VERSION} twenty times`, async () => {
@@ -128,9 +135,15 @@ test("a populated M5 single-query investigation and applied proposal keeps byte-
   const filename = join(root, "app.sqlite3");
   const legacy = createAtVersion(filename, 19);
   const tables = seedLegacyM5(legacy.database, legacy.workspaceId);
-  const before = tableDigests(legacy.database, tables);
+  const before = legacyM5Digests(legacy.database, tables);
   applyMigrations(legacy.database);
-  assert.deepEqual(tableDigests(legacy.database, tables), before);
+  assert.deepEqual(legacyM5Digests(legacy.database, tables), before);
+  assert.deepEqual(legacy.database.prepare(`SELECT origin_kind AS originKind, investigation_id AS investigationId,
+    research_run_id AS researchRunId FROM knowledge_proposals`).get(),
+  { originKind: "legacy-investigation", investigationId: legacy.database.prepare("SELECT investigation_id AS id FROM internet_investigations").get().id,
+    researchRunId: null });
+  assert.deepEqual(legacy.database.prepare(`SELECT evidence_kind AS evidenceKind, direct_snapshot_id AS directSnapshotId
+    FROM knowledge_proposal_revisions`).get(), { evidenceKind: "legacy-fetch", directSnapshotId: null });
   assert.equal(legacy.database.prepare("SELECT count(*) AS count FROM research_requests").get().count, 0);
   assert.deepEqual(legacy.database.prepare("SELECT scope_kind AS scopeKind, adapter_id AS adapterId FROM web_search_artifact_runs").get(),
     { scopeKind: "legacy-investigation", adapterId: "brave-search" });
