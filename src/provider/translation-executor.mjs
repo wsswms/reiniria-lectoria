@@ -46,6 +46,7 @@ export class TranslationExecutor {
     this.database = database;
     this.workspaceId = required(trustedWorkspaceId, "trustedWorkspaceId");
     this.invokeProvider = invokeProvider;
+    this.managesFlowBudget = invokeProvider.managesFlowBudget === true;
     this.credentialRef = required(credentialRef, "credentialRef");
     this.pricingVersion = required(pricingVersion, "pricingVersion");
     this.workerId = required(workerId, "workerId");
@@ -81,6 +82,7 @@ export class TranslationExecutor {
   }
 
   #finalizeFlowBudget(attemptId, outcome, providerCategory = null) {
+    if (this.managesFlowBudget) return null;
     const binding = this.#flowBinding(attemptId); if (!binding) return null;
     if (outcome === "unknown") {
       return this.flowBudgets.unknown(binding.workflowId, binding.reservationId,

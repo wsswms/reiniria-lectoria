@@ -119,7 +119,7 @@ test("actual remote usage above its atomic reservation pauses instead of accepti
   } finally { await value.close(); }
 });
 
-test("recovery marks interrupted remote work unknown but safely replays an unfinished local receipt", async () => {
+test("recovery marks interrupted remote work unknown and pauses unfinished local receipt", async () => {
   const remote = await fixture();
   try {
     remote.service.beginCall({ attemptId: remote.attempt.attempt_id, callId: "remote-active", callSequence: 1, turnOrdinal: 1,
@@ -133,7 +133,7 @@ test("recovery marks interrupted remote work unknown but safely replays an unfin
     local.service.beginCall({ attemptId: local.attempt.attempt_id, callId: "local-active", callSequence: 1, turnOrdinal: 1,
       kind: "local-tool", name: "calculate_number", toolCallId: "local-tool", requestDigest: sha("local") });
     const recovery = local.service.recover(local.attempt.attempt_id);
-    assert.equal(recovery.action, "replay-local"); assert.equal(recovery.call.callId, "local-active");
+    assert.equal(recovery.action, "paused-local-replay"); assert.equal(recovery.call.callId, "local-active");
     local.service.completeCall("local-active", { resultDigest: sha("result"), receiptDigest: sha("receipt") });
     assert.equal(local.service.completeCall("local-active", { resultDigest: sha("result"), receiptDigest: sha("receipt") }).reused, true);
     assert.throws(() => local.service.completeCall("local-active", { resultDigest: sha("forged"), receiptDigest: sha("receipt") }), /outcome conflict/);

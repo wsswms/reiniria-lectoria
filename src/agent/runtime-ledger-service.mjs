@@ -215,7 +215,10 @@ export class AgentRuntimeLedgerService {
   recover(attemptIdInput) {
     const attempt = this.#attempt(attemptIdInput); const open = this.#openCall(attempt.attempt_id);
     if (open) {
-      if (open.kind === "local-tool") return Object.freeze({ action: "replay-local", call: this.#callView(open) });
+      // The first ledger schema deliberately stores only a digest for local-tool
+      // arguments. After a control-plane crash that digest is insufficient to
+      // reconstruct the request, so fail closed instead of guessing or replaying.
+      if (open.kind === "local-tool") return Object.freeze({ action: "paused-local-replay", call: this.#callView(open) });
       this.markUnknown(open.call_id, { reason: "interrupted-after-start" });
       return Object.freeze({ action: "paused-unknown", call: this.#callView(open) });
     }
