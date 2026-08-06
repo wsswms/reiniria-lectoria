@@ -155,6 +155,19 @@ export class ExportService {
     return this.#verifyExisting(this.#existing(workflowId, validationRunId, format));
   }
 
+  async download(exportId) {
+    const record = this.database.prepare(`
+      SELECT record.export_id AS exportId, record.content_digest AS contentDigest, record.manifest_digest AS manifestDigest,
+             record.relative_path AS relativePath, metadata.format, metadata.filename
+      FROM export_records AS record JOIN export_artifact_metadata AS metadata
+        ON metadata.workspace_id = record.workspace_id AND metadata.export_id = record.export_id
+      WHERE record.workspace_id = ? AND record.export_id = ?
+    `).get(this.workspaceId, exportId);
+    if (!record) throw new ExportConflictError("export record not found");
+    const verified = await this.#verifyExisting(record);
+    return Object.freeze({ exportId: record.exportId, format: record.format, filename: record.filename, content: verified.content });
+  }
+
   #existing(workflowId, validationRunId, format) {
     return this.database.prepare(`
       SELECT record.export_id AS exportId, record.content_digest AS contentDigest,

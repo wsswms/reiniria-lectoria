@@ -123,6 +123,20 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       try { return jsonResponse(response, 200, { ok: true, data: workspaceManager.get(decodeURIComponent(workspaceMatch[1])) }, cors); }
       catch (error) { return jsonResponse(response, error.statusCode ?? 404, { ok: false, error: { code: error.code ?? "WORKSPACE_ERROR", message: error.message } }, cors); }
     }
+    const downloadMatch = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/exports\/([^/]+)\/download$/);
+    if (downloadMatch && request.method === "GET") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      let close = () => {};
+      try {
+        const scoped = await apiForWorkspace(decodeURIComponent(downloadMatch[1]));
+        const selected = scoped?.api ?? scoped; close = scoped?.close ?? close;
+        const artifact = await selected.execute("export:download", { workspaceId: decodeURIComponent(downloadMatch[1]), exportId: decodeURIComponent(downloadMatch[2]) });
+        const contentTypes = { markdown: "text/markdown; charset=utf-8", html: "text/html; charset=utf-8", text: "text/plain; charset=utf-8", canonical: "application/json; charset=utf-8" };
+        response.writeHead(200, { ...cors, "content-type": contentTypes[artifact.format] ?? "application/octet-stream", "content-disposition": `attachment; filename="${artifact.filename}"`, "content-length": artifact.content.length });
+        response.end(artifact.content); return;
+      } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "EXPORT_ERROR", message: error.message } }, cors); }
+      finally { close(); }
+    }
     if (request.method !== "POST" || url.pathname !== "/api/v1/execute") return jsonResponse(response, 404, { ok: false, error: { code: "NOT_FOUND", message: "route not found" } }, cors);
     if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
     try {

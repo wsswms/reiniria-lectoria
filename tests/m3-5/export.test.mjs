@@ -74,7 +74,9 @@ test("all thirty-six edited fixtures preserve target text, block structure and p
     for (const source of validFixtures) {
       const prepared = await createExportable(fixture, source, translatedText);
       const expected = prepared.exports.workCopies.getBundle(prepared.workflow.workflowId);
-      const ordinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format);
+    const ordinary = await prepared.exports.export(prepared.workflow.workflowId, prepared.run.validationRunId, source.format);
+    const downloaded = await prepared.exports.download(ordinary.exportId);
+    assert.deepEqual(downloaded.content, ordinary.content);
       const reparsed = normalizeDocument(source.format, ordinary.content);
       assert.deepEqual(reparsed.segments.map((segment) => ({
         kind: segment.kind, structuralPath: segment.structuralPath, sourceText: segment.sourceText,

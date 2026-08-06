@@ -101,6 +101,7 @@ export class WorkflowApi {
       case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
       case "review:list": return this.reviews.getEvents(payload.workflowId);
       case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format, payload.qualityRunId ?? null);
+      case "export:download": return this.exports.download(payload.exportId);
       case "knowledge:rebuild": return this.retriever.rebuild();
       case "knowledge:search": return this.retriever.search(payload.request);
       case "knowledge:fact-list": return this.manualKnowledge.list(payload);
