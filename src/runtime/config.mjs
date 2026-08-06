@@ -31,6 +31,7 @@ export function loadHttpConfig(env = process.env) {
     sessionStoreFile: env.LECTORIA_SESSION_STORE_FILE ?? `${dataRoot}/state/sessions.json`,
     authToken: token,
     adminPassword: env.LECTORIA_ADMIN_PASSWORD ?? token,
+    adminPasswordFile: env.LECTORIA_ADMIN_PASSWORD_FILE ?? `${dataRoot}/state/admin-password`,
     sessionTtlSeconds: positiveInteger(env.LECTORIA_SESSION_TTL_SECONDS, "LECTORIA_SESSION_TTL_SECONDS", 86_400),
     loginMaxAttempts: positiveInteger(env.LECTORIA_LOGIN_MAX_ATTEMPTS, "LECTORIA_LOGIN_MAX_ATTEMPTS", 5),
     loginWindowSeconds: positiveInteger(env.LECTORIA_LOGIN_WINDOW_SECONDS, "LECTORIA_LOGIN_WINDOW_SECONDS", 300),
@@ -43,6 +44,7 @@ export function loadHttpConfig(env = process.env) {
 export function assertHttpConfig(config) {
   if (!config || typeof config !== "object") throw new TypeError("HTTP config is required");
   if (!config.authToken) throw new Error("authenticated HTTP configuration is required");
+  if (typeof config.adminPasswordFile !== "string" || !config.adminPasswordFile.startsWith("/") || config.adminPasswordFile === "/") throw new TypeError("adminPasswordFile must be an absolute non-root path");
   if (typeof config.sessionStoreFile !== "string" || !config.sessionStoreFile.startsWith("/") || config.sessionStoreFile === "/") throw new TypeError("sessionStoreFile must be an absolute non-root path");
   if (config.tls.certFile && !existsSync(config.tls.certFile)) throw new Error("TLS certificate file does not exist");
   if (config.tls.keyFile && !existsSync(config.tls.keyFile)) throw new Error("TLS key file does not exist");

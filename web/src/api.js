@@ -13,6 +13,7 @@ export const session = {
   async get() { const data = await request("/api/v1/session"); csrfToken = data.csrfToken ?? null; return data; },
   async login(password) { const data = await request("/api/v1/session/login", { method: "POST", body: JSON.stringify({ password }) }); csrfToken = data.csrfToken; return data; },
   async logout() { const data = await request("/api/v1/session/logout", { method: "POST" }); csrfToken = null; return data; },
+  async changePassword(currentPassword, newPassword) { const data = await request("/api/v1/session/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) }); csrfToken = data.csrfToken; return data; },
 };
 
 export const workspaces = {

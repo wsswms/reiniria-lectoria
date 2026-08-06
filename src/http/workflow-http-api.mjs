@@ -40,6 +40,24 @@ function persistSessions(file, sessions) {
   renameSync(temp, file);
 }
 
+function loadPassword(file, fallback) {
+  if (!file) return fallback;
+  if (!existsSync(file)) { persistPassword(file, fallback); return fallback; }
+  const stat = lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error("admin password store must be a private regular file");
+  const password = readFileSync(file, "utf8").trimEnd();
+  if (!password) throw new Error("admin password store is empty");
+  return password;
+}
+
+function persistPassword(file, password) {
+  if (!file) return;
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  writeFileSync(temp, `${password}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  renameSync(temp, file);
+}
+
 function cookieValue(header, name) {
   return String(header ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 }
@@ -67,6 +85,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
   if ((!api || typeof api.execute !== "function") && typeof apiForWorkspace !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
   const sessions = loadSessions(config.sessionStoreFile);
+  let currentAdminPassword = loadPassword(config.adminPasswordFile, config.adminPassword);
   const loginFailures = new Map();
   const sessionCookie = "lectoria_session";
   const issueSession = () => { const token = randomBytes(32).toString("base64url"); const session = { expiresAt: Date.now() + config.sessionTtlSeconds * 1000, csrfToken: randomBytes(24).toString("base64url") }; sessions.set(config.sessionStoreFile ? sessionDigest(token) : token, session); persistSessions(config.sessionStoreFile, sessions); return { token, ...session }; };
@@ -95,7 +114,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
         if (failure && failure.resetAt > now && failure.count >= (config.loginMaxAttempts ?? 5)) throw Object.assign(new Error("too many login attempts"), { statusCode: 429, code: "LOGIN_RATE_LIMITED" });
         if (failure && failure.resetAt <= now) loginFailures.delete(key);
         const input = await readJson(request, config.maxBodyBytes);
-        if (!input || typeof input.password !== "string" || !sameSecret(input.password, config.adminPassword)) {
+        if (!input || typeof input.password !== "string" || !sameSecret(input.password, currentAdminPassword)) {
           const current = loginFailures.get(key); const windowMs = (config.loginWindowSeconds ?? 300) * 1000;
           loginFailures.set(key, { count: (current?.resetAt > now ? current.count : 0) + 1, resetAt: current?.resetAt > now ? current.resetAt : now + windowMs });
           throw Object.assign(new Error("invalid credentials"), { statusCode: 401, code: "UNAUTHENTICATED" });
@@ -123,6 +142,19 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: user.id }, ...(user.csrfToken ? { csrfToken: user.csrfToken } : {}) } }, cors);
     }
     if (user?.token && request.method !== "GET" && !sameSecret(request.headers["x-csrf-token"] ?? "", user.csrfToken)) return jsonResponse(response, 403, { ok: false, error: { code: "CSRF_DENIED", message: "CSRF token is missing or invalid" } }, cors);
+    if (request.method === "POST" && url.pathname === "/api/v1/session/password") {
+      try {
+        const input = await readJson(request, config.maxBodyBytes);
+        if (!input || typeof input.currentPassword !== "string" || !sameSecret(input.currentPassword, currentAdminPassword)) throw Object.assign(new Error("current password is invalid"), { statusCode: 401, code: "UNAUTHENTICATED" });
+        if (typeof input.newPassword !== "string" || input.newPassword.length < 8 || input.newPassword.length > 256) throw Object.assign(new Error("new password must be 8 to 256 characters"), { statusCode: 422, code: "INVALID_PASSWORD" });
+        currentAdminPassword = input.newPassword; persistPassword(config.adminPasswordFile, currentAdminPassword);
+        sessions.clear(); persistSessions(config.sessionStoreFile, sessions);
+        const session = issueSession(); const secure = config.cookieSecure ? "; Secure" : "";
+        return jsonResponse(response, 200, { ok: true, data: { changed: true, csrfToken: session.csrfToken } }, { ...cors, "set-cookie": `${sessionCookie}=${session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}${secure}` });
+      } catch (error) {
+        return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "PASSWORD_CHANGE_FAILED", message: error.message } }, cors);
+      }
+    }
     if (request.method === "POST" && url.pathname === "/api/v1/session/logout") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       if (user.token) { sessions.delete(config.sessionStoreFile ? sessionDigest(user.token) : user.token); persistSessions(config.sessionStoreFile, sessions); }

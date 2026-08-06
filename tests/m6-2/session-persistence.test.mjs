@@ -58,3 +58,22 @@ test("session store rejects a symlink or broad permissions", async () => {
   await chmod(file, 0o644);
   assert.throws(() => createWorkflowHttpServer({ config, api: { execute() {} } }), /private regular file/);
 });
+
+test("authenticated password rotation invalidates old sessions and survives restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lectoria-password-"));
+  const config = { authToken: "token", adminPassword: "password-old", adminPasswordFile: join(root, "state", "admin-password"), sessionStoreFile: join(root, "state", "sessions.json"), sessionTtlSeconds: 3600, maxBodyBytes: 1024 * 1024, allowedOrigins: [] };
+  const first = await listen(config);
+  const login = await request(`${first.base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "password-old" }) });
+  const oldCookie = login.headers["set-cookie"][0].split(";", 1)[0]; const csrf = login.json().data.csrfToken;
+  const changed = await request(`${first.base}/api/v1/session/password`, { method: "POST", headers: { cookie: oldCookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ currentPassword: "password-old", newPassword: "password-new" }) });
+  assert.equal(changed.status, 200);
+  const newCookie = changed.headers["set-cookie"][0].split(";", 1)[0]; const newCsrf = changed.json().data.csrfToken;
+  assert.equal((await request(`${first.base}/api/v1/session`, { headers: { cookie: oldCookie } })).status, 401);
+  await new Promise((resolve) => first.server.close(resolve));
+  const second = await listen(config);
+  assert.equal((await request(`${second.base}/api/v1/session`, { headers: { cookie: newCookie } })).status, 200);
+  assert.equal((await request(`${second.base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "password-old" }) })).status, 401);
+  assert.equal((await request(`${second.base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "password-new" }) })).status, 200);
+  await request(`${second.base}/api/v1/session/logout`, { method: "POST", headers: { cookie: newCookie, "x-csrf-token": newCsrf } });
+  await new Promise((resolve) => second.server.close(resolve));
+});
