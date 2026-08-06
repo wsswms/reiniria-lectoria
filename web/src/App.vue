@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref } from "vue";
 import { NAlert, NButton, NCard, NConfigProvider, NDivider, NEmpty, NForm, NFormItem, NInput, NLayout, NLayoutContent, NLayoutHeader, NList, NListItem, NSpace, NSelect, NSpin, NTag } from "naive-ui";
 import { session, workspaces, workflow, providerConfig } from "./api.js";
+import TranslationWorkbench from "./TranslationWorkbench.vue";
 
 const theme = inject("theme");
 const loggedIn = ref(false); const loading = ref(true); const busy = ref(false); const error = ref("");
@@ -57,6 +58,7 @@ onMounted(restore);
                 <template v-else><n-tag type="info">Context：{{ contextState.head.state }}</n-tag><n-space v-if="contextState.head.state === 'pending-user'"><n-button type="success" :loading="busy" @click="decideContext('approved')">批准 Context</n-button><n-button secondary :loading="busy" @click="decideContext('rejected')">退回 Context</n-button></n-space><n-button v-if="contextState.head.state === 'approved' && !taskState" type="primary" :loading="busy" @click="enqueueTranslation">创建翻译任务</n-button><n-tag v-if="taskState" type="warning">任务：{{ taskState.task?.state ?? taskState.state }}</n-tag></template>
               </n-space>
             </n-card>
+            <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" />
           </n-space>
         </template>
       </n-layout-content>

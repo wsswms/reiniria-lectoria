@@ -32,6 +32,17 @@ export const workflow = {
   decideContext: (workspaceId, workflowId, expectedVersion, decision) => workflow.execute("context:decide", { workspaceId, workflowId, expectedVersion, decision }),
   enqueueTranslation: (workspaceId, workflowId, request) => workflow.execute("translation:enqueue", { workspaceId, workflowId, request }),
   getTask: (workspaceId, taskId) => workflow.execute("translation:task-get", { workspaceId, taskId }),
+  getBundle: (workspaceId, workflowId) => workflow.execute("working-copy:get", { workspaceId, workflowId }),
+  listCandidates: (workspaceId, workflowId, segmentId) => workflow.execute("candidate:list", { workspaceId, workflowId, segmentId }),
+  selectCandidate: (workspaceId, workflowId, segmentId, candidateId, expectedHeadVersion) => workflow.execute("candidate:select", { workspaceId, workflowId, segmentId, candidateId, expectedHeadVersion }),
+  editSegment: (workspaceId, workflowId, segmentId, expectedHeadVersion, text) => workflow.execute("working-copy:edit", { workspaceId, workflowId, segmentId, expectedHeadVersion, text }),
+  validate: (workspaceId, workflowId) => workflow.execute("validate", { workspaceId, workflowId }),
+  getValidation: (workspaceId, validationRunId) => workflow.execute("validation:get", { workspaceId, validationRunId }),
+  confirmWarning: (workspaceId, workflowId, validationRunId, findingId) => workflow.execute("warning:confirm", { workspaceId, workflowId, validationRunId, findingId }),
+  review: (workspaceId, workflowId, validationRunId, expectedWorkflowVersion) => workflow.execute("review", { workspaceId, workflowId, validationRunId, expectedWorkflowVersion }),
+  approve: (workspaceId, workflowId, validationRunId, expectedWorkflowVersion) => workflow.execute("approve", { workspaceId, workflowId, validationRunId, expectedWorkflowVersion }),
+  reviewList: (workspaceId, workflowId) => workflow.execute("review:list", { workspaceId, workflowId }),
+  export: (workspaceId, workflowId, validationRunId, format) => workflow.execute("export", { workspaceId, workflowId, validationRunId, format }),
 };
 
 export const providerConfig = {
