@@ -1,0 +1,23 @@
+FROM node@sha256:afff6d8c97964a438d2e6a9c96509367e45d8bf93f790ad561a1eaea926303d9 AS dependencies
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts \
+    && rm -rf node_modules/better-sqlite3/prebuilds \
+    && cd node_modules/better-sqlite3 \
+    && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --release --nodedir=/usr/local \
+    && cd /app \
+    && npm cache clean --force
+
+FROM gcr.io/distroless/nodejs22-debian13@sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50
+
+WORKDIR /app
+ENV NODE_ENV=production HOME=/tmp/lectoria-home LECTORIA_DATA_ROOT=/var/lib/lectoria
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
+COPY src ./src
+COPY scripts/m6-http-server.mjs ./scripts/m6-http-server.mjs
+COPY schemas ./schemas
+USER 65532:65532
+VOLUME ["/var/lib/lectoria"]
+ENTRYPOINT ["/nodejs/bin/node", "scripts/m6-http-server.mjs"]
