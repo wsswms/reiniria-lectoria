@@ -105,6 +105,57 @@ test("production HTTP bootstrap executes document and workflow commands in the s
       body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
     });
     assert.equal(finalTaskResponse.json().data.task.state, "completed");
+    const bundleResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "working-copy:get", payload: { workspaceId: workspace.workspaceId, workflowId } }),
+    });
+    assert.equal(bundleResponse.status, 200); let bundle = bundleResponse.json().data;
+    for (const segment of bundle.segments) {
+      const candidatesResponse = await request(`${base}/api/v1/execute`, {
+        method: "POST", headers: authHeaders,
+        body: JSON.stringify({ command: "candidate:list", payload: { workspaceId: workspace.workspaceId, workflowId, segmentId: segment.segmentId } }),
+      });
+      const candidate = candidatesResponse.json().data[0]; assert.ok(candidate);
+      const selectedResponse = await request(`${base}/api/v1/execute`, {
+        method: "POST", headers: authHeaders,
+        body: JSON.stringify({ command: "candidate:select", payload: { workspaceId: workspace.workspaceId, workflowId, segmentId: segment.segmentId, candidateId: candidate.candidateId, expectedHeadVersion: segment.version ?? null } }),
+      });
+      assert.equal(selectedResponse.status, 200, JSON.stringify(selectedResponse.json()));
+    }
+    const validationResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "validate", payload: { workspaceId: workspace.workspaceId, workflowId } }),
+    });
+    assert.equal(validationResponse.status, 200); const validation = validationResponse.json().data;
+    assert.equal(validation.findings.some((item) => item.severity === "error"), false);
+    const qualityResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "quality:run", payload: { workspaceId: workspace.workspaceId, workflowId } }),
+    });
+    assert.equal(qualityResponse.status, 200, JSON.stringify(qualityResponse.json())); const quality = qualityResponse.json().data;
+    assert.equal(quality.findings.some((item) => item.severity === "error"), false);
+    const currentResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "working-copy:get", payload: { workspaceId: workspace.workspaceId, workflowId } }),
+    });
+    let current = currentResponse.json().data.workflow;
+    const reviewResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "review", payload: { workspaceId: workspace.workspaceId, workflowId, validationRunId: validation.validationRunId, qualityRunId: quality.qualityRunId, expectedWorkflowVersion: current.version } }),
+    });
+    assert.equal(reviewResponse.status, 200, JSON.stringify(reviewResponse.json())); current = reviewResponse.json().data;
+    assert.equal(current.state, "human-reviewed");
+    const approveResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "approve", payload: { workspaceId: workspace.workspaceId, workflowId, validationRunId: validation.validationRunId, qualityRunId: quality.qualityRunId, expectedWorkflowVersion: current.version } }),
+    });
+    assert.equal(approveResponse.status, 200, JSON.stringify(approveResponse.json()));
+    assert.equal(approveResponse.json().data.state, "approved-for-export");
+    const exportResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "export", payload: { workspaceId: workspace.workspaceId, workflowId, validationRunId: validation.validationRunId, qualityRunId: quality.qualityRunId, format: "markdown" } }),
+    });
+    assert.equal(exportResponse.status, 200, JSON.stringify(exportResponse.json())); assert.ok(exportResponse.json().data.exportId);
     const handle = manager.open(workspace.workspaceId);
     try {
       const snapshot = handle.database.prepare("SELECT provider_id AS providerId, model_id AS modelId, config_digest AS configDigest, snapshot_json AS snapshotJson FROM translation_attempt_config_snapshots WHERE workspace_id = ? AND task_id = ?").get(workspace.workspaceId, queued.task.task.task_id);

@@ -56,7 +56,7 @@ export function createWorkspaceApiFactory(workspaceManager) {
       }
       return baseExecutor.executeNext();
     } };
-    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, reviews, exports, retriever, manualKnowledge });
+    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, quality, reviews, exports, retriever, manualKnowledge });
     return Object.freeze({ api, close: () => handle.database.close() });
   };
 }

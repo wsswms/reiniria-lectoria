@@ -1,5 +1,5 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
+  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, quality = null, reviews, exports,
     retriever = null, integrity = null, manualKnowledge = null }) {
     this.imports = imports;
     this.reimports = reimports;
@@ -15,6 +15,7 @@ export class WorkflowApi {
     this.research = research;
     this.workCopies = workCopies;
     this.validation = validation;
+    this.quality = quality;
     this.reviews = reviews;
     this.exports = exports;
     this.retriever = retriever;
@@ -77,6 +78,9 @@ export class WorkflowApi {
       case "qa:get": return this.m5cQa.get(payload.qaRunId);
       case "qa:decide": return this.m5cQa.decideFinding(payload.qaRunId, payload.findingId, payload.decision, payload.actor);
       case "qa:retranslate": return this.remediation.retranslate(payload.qaRunId, payload.findingIds, payload.request, payload.actor);
+      case "quality:run": return this.quality.runWorking(payload.workflowId, payload.options ?? {});
+      case "quality:get": return this.quality.get(payload.qualityRunId);
+      case "quality:confirm-warning": return this.quality.confirmWarning(payload.workflowId, payload.qualityRunId, payload.findingId, payload.actor);
       case "flow:resolve": return this.recovery.resolve(payload.workflowId, payload.expectedVersion, payload.action, payload.request ?? null, payload.actor);
       case "flow:get": return this.recovery.get(payload.workflowId);
       case "research:propose": return this.research.propose(payload.workflowId, payload.request, payload.actor);

@@ -34,6 +34,19 @@ test("HTTP API authenticates and delegates through one application API", async (
   assert.deepEqual(calls, [{ command: "review", payload: { workflowId: "w", actor: { type: "user", id: "owner" } } }]);
 });
 
+test("quality QA commands are authenticated and warning confirmation always uses the login user", async () => {
+  const calls = [];
+  await withServer({ execute(command, payload) { calls.push({ command, payload }); return { qualityRunId: "quality-1" }; } }, config, async (base) => {
+    const response = await request(`${base}/api/v1/execute`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: JSON.stringify({ command: "quality:confirm-warning", payload: { workflowId: "workflow-1", qualityRunId: "quality-1", findingId: "finding-1", actor: { type: "system", id: "forged" } } }),
+    });
+    assert.equal(response.status, 200);
+  });
+  assert.deepEqual(calls, [{ command: "quality:confirm-warning", payload: { workflowId: "workflow-1", qualityRunId: "quality-1", findingId: "finding-1", actor: { type: "user", id: "owner" } } }]);
+});
+
 test("login creates an HttpOnly session cookie and logout revokes it", async () => {
   await withServer({ execute() { return { ok: true }; } }, config, async (base) => {
     const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
