@@ -141,6 +141,9 @@ export class KnowledgeProposalService {
       WHERE proposal.workspace_id = ? AND proposal.proposal_id = ?`).get(this.workspaceId, proposalId);
     if (!row) throw new ProposalConflictError("proposal not found");
     const status = this.currentStatus(row);
+    const application = this.database.prepare(`SELECT application_id AS applicationId, proposal_revision_id AS proposalRevisionId,
+      fact_id AS factId, fact_revision_id AS factRevisionId, actor_id AS actorId, applied_at AS appliedAt
+      FROM knowledge_proposal_applications WHERE workspace_id = ? AND proposal_id = ?`).get(this.workspaceId, row.proposalId);
     return Object.freeze({ proposalId: row.proposalId, originKind: row.originKind, investigationId: row.investigationId,
       researchRunId: row.researchRunId, workflowId: row.workflowId,
       segmentId: row.segmentId, revision: Object.freeze({ proposalRevisionId: row.proposalRevisionId,
@@ -149,7 +152,8 @@ export class KnowledgeProposalService {
         factId: row.factId, baseFactRevisionId: row.baseFactRevisionId, proposedSource: JSON.parse(row.proposedSourceJson),
         proposedSourceDigest: row.proposedSourceDigest, proposalPolicyVersion: row.proposalPolicyVersion }),
       head: Object.freeze({ proposalRevisionId: row.proposalRevisionId, revisionVersion: row.revisionVersion,
-        version: row.headVersion, state: row.state, updatedAt: row.updatedAt }), current: status.current, staleReason: status.reason });
+        version: row.headVersion, state: row.state, updatedAt: row.updatedAt }), current: status.current, staleReason: status.reason,
+      application: application ? Object.freeze(application) : null });
   }
 
   list({ state = null, limit = 100 } = {}) {
