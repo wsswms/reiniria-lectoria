@@ -33,3 +33,9 @@ export const workflow = {
   enqueueTranslation: (workspaceId, workflowId, request) => workflow.execute("translation:enqueue", { workspaceId, workflowId, request }),
   getTask: (workspaceId, taskId) => workflow.execute("translation:task-get", { workspaceId, taskId }),
 };
+
+export const providerConfig = {
+  list: () => request("/api/v1/provider-config"),
+  createSource: (input) => request("/api/v1/provider-config/sources", { method: "POST", body: JSON.stringify(input) }),
+  setPreset: (input) => request("/api/v1/provider-config/presets", { method: "POST", body: JSON.stringify(input) }),
+};

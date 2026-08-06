@@ -1,8 +1,9 @@
 import { createWorkflowHttpServer } from "./server.mjs";
 import { createWorkspaceApiFactory } from "./workspace-api-factory.mjs";
+import { ProviderConfigurationService } from "../provider/configuration-service.mjs";
 
 /** Create the LAN HTTP server with real workspace-scoped domain services. */
 export async function createProductionWorkflowHttpServer({ config, workspaceManager, health = () => ({ status: "ok", service: "lectoria" }) }) {
   if (!config || !workspaceManager) throw new TypeError("config and workspaceManager are required");
-  return createWorkflowHttpServer({ config, workspaceManager, apiForWorkspace: createWorkspaceApiFactory(workspaceManager), health });
+  return createWorkflowHttpServer({ config, workspaceManager, providerConfiguration: new ProviderConfigurationService(config.dataRoot ?? workspaceManager.root), apiForWorkspace: createWorkspaceApiFactory(workspaceManager), health });
 }

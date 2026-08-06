@@ -36,7 +36,7 @@ async function readJson(request, maxBodyBytes) {
   catch { throw Object.assign(new Error("request body must be valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); }
 }
 
-export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config, workspaceManager = null, health = () => ({ status: "ok" }) }) {
+export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config, workspaceManager = null, providerConfiguration = null, health = () => ({ status: "ok" }) }) {
   if ((!api || typeof api.execute !== "function") && typeof apiForWorkspace !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
   const sessions = new Map();
@@ -90,6 +90,21 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       if (user.token) sessions.delete(user.token);
       return jsonResponse(response, 200, { ok: true, data: { loggedOut: true } }, { ...cors, "set-cookie": `${sessionCookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
+    }
+    if (providerConfiguration && url.pathname === "/api/v1/provider-config" && request.method === "GET") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try { return jsonResponse(response, 200, { ok: true, data: await providerConfiguration.list() }, cors); }
+      catch (error) { return jsonResponse(response, 422, { ok: false, error: { code: error.code ?? "PROVIDER_CONFIG_ERROR", message: error.message } }, cors); }
+    }
+    if (providerConfiguration && url.pathname === "/api/v1/provider-config/sources" && request.method === "POST") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try { const input = await readJson(request, config.maxBodyBytes); return jsonResponse(response, 201, { ok: true, data: await providerConfiguration.createSource(input, input.expectedRevision ?? null) }, cors); }
+      catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "PROVIDER_CONFIG_ERROR", message: error.message } }, cors); }
+    }
+    if (providerConfiguration && url.pathname === "/api/v1/provider-config/presets" && request.method === "POST") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try { const input = await readJson(request, config.maxBodyBytes); return jsonResponse(response, 201, { ok: true, data: await providerConfiguration.setPreset(input, input.expectedRevision ?? null) }, cors); }
+      catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "PROVIDER_CONFIG_ERROR", message: error.message } }, cors); }
     }
     if (workspaceManager && url.pathname === "/api/v1/workspaces" && (request.method === "GET" || request.method === "POST")) {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
