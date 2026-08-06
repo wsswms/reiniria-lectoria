@@ -25,4 +25,8 @@ export const workflow = {
   get: (workspaceId, workflowId) => workflow.execute("workflow:get", { workspaceId, workflowId }),
   submitPlan: (workspaceId, workflowId, expectedVersion) => workflow.execute("plan:submit", { workspaceId, workflowId, expectedVersion }),
   decidePlan: (workspaceId, workflowId, expectedVersion, decision) => workflow.execute("plan:decide", { workspaceId, workflowId, expectedVersion, decision }),
+  assembleContext: (workspaceId, workflowId) => workflow.execute("context:assemble", { workspaceId, workflowId }),
+  decideContext: (workspaceId, workflowId, expectedVersion, decision) => workflow.execute("context:decide", { workspaceId, workflowId, expectedVersion, decision }),
+  enqueueTranslation: (workspaceId, workflowId, request) => workflow.execute("translation:enqueue", { workspaceId, workflowId, request }),
+  getTask: (workspaceId, taskId) => workflow.execute("translation:task-get", { workspaceId, taskId }),
 };

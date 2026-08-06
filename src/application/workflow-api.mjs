@@ -61,6 +61,7 @@ export class WorkflowApi {
       case "context:get": return this.contexts.get(payload.workflowId);
       case "context:decide": return this.contexts.decide(payload.workflowId, payload.expectedVersion, payload.decision, payload.actor);
       case "translation:enqueue": return this.contexts.enqueueTranslation(payload.workflowId, payload.request);
+      case "translation:task-get": return this.contexts.tasks.getTask(payload.taskId);
       case "qa:run": {
         const options = payload.options ?? {};
         if (options.modelFindings !== undefined || options.layers?.includes("model")) throw new TypeError("model QA must use the controlled model QA executor");
