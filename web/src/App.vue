@@ -3,6 +3,7 @@ import { computed, inject, onMounted, ref } from "vue";
 import { NAlert, NButton, NCard, NConfigProvider, NDivider, NEmpty, NForm, NFormItem, NInput, NLayout, NLayoutContent, NLayoutHeader, NList, NListItem, NSpace, NSelect, NSpin, NTag } from "naive-ui";
 import { session, workspaces, workflow, providerConfig } from "./api.js";
 import TranslationWorkbench from "./TranslationWorkbench.vue";
+import KnowledgePanel from "./KnowledgePanel.vue";
 
 const theme = inject("theme");
 const loggedIn = ref(false); const loading = ref(true); const busy = ref(false); const error = ref("");
@@ -61,6 +62,7 @@ onMounted(restore);
               </n-space>
             </n-card>
             <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" />
+            <KnowledgePanel v-if="selected" :workspace-id="selected.workspaceId" />
           </n-space>
         </template>
       </n-layout-content>

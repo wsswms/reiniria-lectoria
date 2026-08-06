@@ -14,6 +14,8 @@ import { M5CRemediationService } from "../m5c/remediation-service.mjs";
 import { TranslationExecutor } from "../provider/translation-executor.mjs";
 import { DeterministicFakeProvider } from "../provider/fake-provider.mjs";
 import { PricingBudgetService } from "../provider/cost-budget.mjs";
+import { FtsRetriever } from "../knowledge/fts-retriever.mjs";
+import { ManualKnowledgeService } from "../knowledge/manual-knowledge-service.mjs";
 
 /**
  * Build the application facade for one trusted workspace. The HTTP layer only
@@ -37,6 +39,9 @@ export function createWorkspaceApiFactory(workspaceManager) {
     const recovery = new FlowRecoveryService(handle.database, handle.record.workspaceId, { contexts, tasks: contexts.tasks, budgets: contexts.budgets });
     const m5cQa = new M5CQAService(handle.database, handle.record.workspaceId, { workCopies });
     const remediation = new M5CRemediationService(handle.database, handle.record.workspaceId, { contexts, budgets: contexts.budgets });
+    const fts = new FtsRetriever(handle.root, handle.database, handle.record.workspaceId);
+    const retriever = { search: async (request) => { try { fts.manifest(); } catch { await fts.rebuild(); } return fts.search(request); }, rebuild: () => fts.rebuild(), manifest: () => fts.manifest() };
+    const manualKnowledge = new ManualKnowledgeService({ root: handle.root, database: handle.database, workspaceId: handle.record.workspaceId, retriever });
     const fakeProvider = new DeterministicFakeProvider({ id: "deepseek" });
     const offlineBudgets = new PricingBudgetService(handle.database, handle.record.workspaceId);
     if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = 'deepseek' AND model_id = 'deepseek-v4-flash' AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId)) offlineBudgets.addPricing({ providerId: "deepseek", modelId: "deepseek-v4-flash", pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
@@ -49,7 +54,7 @@ export function createWorkspaceApiFactory(workspaceManager) {
       if (pending) offlineBudgets.assignTask(pending.taskId, "m6-fake-policy");
       return baseExecutor.executeNext();
     } };
-    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, reviews, exports });
+    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, reviews, exports, retriever, manualKnowledge });
     return Object.freeze({ api, close: () => handle.database.close() });
   };
 }

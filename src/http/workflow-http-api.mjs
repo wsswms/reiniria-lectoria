@@ -7,6 +7,7 @@ const AUTH_COMMANDS = new Set([
   "quality:confirm-warning", "qa:decide", "qa:retranslate", "review", "approve", "internet:create", "internet:fetch",
   "proposal:create", "proposal:revise", "proposal:decide", "proposal:apply",
   "translation:run-next",
+  "knowledge:fact-create", "knowledge:fact-revise", "knowledge:fact-state",
 ]);
 const SYSTEM_COMMANDS = new Set(["plan:submit", "guidance:propose", "guidance:interpret", "context:assemble"]);
 

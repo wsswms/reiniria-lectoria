@@ -51,3 +51,12 @@ export const providerConfig = {
   createSource: (input) => request("/api/v1/provider-config/sources", { method: "POST", body: JSON.stringify(input) }),
   setPreset: (input) => request("/api/v1/provider-config/presets", { method: "POST", body: JSON.stringify(input) }),
 };
+
+export const knowledge = {
+  search: (workspaceId, request) => workflow.execute("knowledge:search", { workspaceId, request }),
+  rebuild: (workspaceId) => workflow.execute("knowledge:rebuild", { workspaceId }),
+  list: (workspaceId, input = {}) => workflow.execute("knowledge:fact-list", { workspaceId, ...input }),
+  create: (workspaceId, input) => workflow.execute("knowledge:fact-create", { workspaceId, ...input }),
+  revise: (workspaceId, input) => workflow.execute("knowledge:fact-revise", { workspaceId, ...input }),
+  setState: (workspaceId, input) => workflow.execute("knowledge:fact-state", { workspaceId, ...input }),
+};

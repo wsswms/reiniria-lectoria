@@ -1,6 +1,6 @@
 export class WorkflowApi {
   constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
-    retriever = null, integrity = null }) {
+    retriever = null, integrity = null, manualKnowledge = null }) {
     this.imports = imports;
     this.reimports = reimports;
     this.flowPlans = flowPlans;
@@ -19,6 +19,7 @@ export class WorkflowApi {
     this.exports = exports;
     this.retriever = retriever;
     this.integrity = integrity;
+    this.manualKnowledge = manualKnowledge;
   }
 
   execute(command, payload) {
@@ -102,6 +103,10 @@ export class WorkflowApi {
       case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format, payload.qualityRunId ?? null);
       case "knowledge:rebuild": return this.retriever.rebuild();
       case "knowledge:search": return this.retriever.search(payload.request);
+      case "knowledge:fact-list": return this.manualKnowledge.list(payload);
+      case "knowledge:fact-create": return this.manualKnowledge.create(payload, payload.actor);
+      case "knowledge:fact-revise": return this.manualKnowledge.revise(payload, payload.actor);
+      case "knowledge:fact-state": return this.manualKnowledge.setState(payload, payload.actor);
       case "knowledge:diagnose": return this.integrity.diagnose();
       case "knowledge:repair-derived": return this.integrity.repairDerived();
       default: throw new TypeError("unknown workflow command");
