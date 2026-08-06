@@ -161,6 +161,23 @@ export class AgentRuntimeLedgerService {
     return Object.freeze({ outcome: "unknown", reused: false });
   }
 
+  cancelCall(callIdInput, details = {}) {
+    const callId = required(callIdInput, "callId", 128); const call = this.#call(callId);
+    if (call.kind !== "local-tool") throw new AgentRuntimeConflictError("only local work can be canceled by the Host");
+    const existing = this.#outcome(callId);
+    if (existing) {
+      if (existing.outcome !== "canceled") throw new AgentRuntimeConflictError("outcome conflict");
+      return Object.freeze({ outcome: "canceled", reused: true });
+    }
+    const reason = required(details.reason ?? "local-tool-failed", "cancel reason", 128);
+    this.database.transaction(() => {
+      this.#insertOutcome(call, "canceled", { details: { reason, ...(details.errorCode ? { errorCode: String(details.errorCode) } : {}) } });
+      this.database.prepare("UPDATE translation_tasks SET state = 'failed', version = version + 1, updated_at = ? WHERE workspace_id = ? AND task_id = ? AND state IN ('queued','running')")
+        .run(this.now().toISOString(), this.workspaceId, call.task_id);
+    }).immediate();
+    return Object.freeze({ outcome: "canceled", reused: false });
+  }
+
   releaseUnissued(callIdInput, details = {}) {
     const callId = required(callIdInput, "callId", 128); const call = this.#call(callId);
     if (!REMOTE.has(call.kind) || details.definitelyUnissued !== true) throw new AgentRuntimeConflictError("release requires definite non-issuance");
