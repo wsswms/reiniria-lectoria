@@ -49,10 +49,10 @@ async function fixture(options = {}) {
     close: async () => { database.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
-test("schema v31 adds only immutable call, outcome, and checkpoint facts", async () => {
+test("current schema retains the v31 immutable call, outcome, and checkpoint facts", async () => {
   const value = await fixture();
   try {
-    assert.equal(CURRENT_SCHEMA_VERSION, 31);
+    assert.equal(CURRENT_SCHEMA_VERSION, 32);
     const names = value.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_runtime_%' ORDER BY name").all().map((row) => row.name);
     assert.deepEqual(names, ["agent_runtime_calls", "agent_runtime_checkpoints", "agent_runtime_outcomes"]);
     assert.equal(value.database.prepare("SELECT count(*) AS total FROM sqlite_master WHERE type = 'table' AND name LIKE '%session%'").get().total, 0);
