@@ -55,7 +55,13 @@ export async function runAgentHostProcess({ attempt, ledger, invokeRound, execut
           kind: local ? "local-tool" : "remote-tool", name: value.toolName, toolCallId: value.toolCallId, requestDigest: value.requestDigest,
           ...(local ? {} : { budgetReservationId: `agent-budget:${attempt.attemptId}:${sequence}`, estimate }) });
         let output; try { output = await executeTool(value, { signal }); }
-        catch (error) { if (!local) ledger.markUnknown(callId, { reason: "tool-no-trusted-result" }); throw error; }
+        catch (error) {
+          const errorCode = typeof error?.code === "string" && /^[A-Z0-9_]{1,64}$/u.test(error.code) ? error.code
+            : typeof error?.name === "string" && /^[A-Za-z0-9_-]{1,64}$/u.test(error.name) ? error.name : undefined;
+          if (local) ledger.cancelCall(callId, { reason: "local-tool-failed", ...(errorCode ? { errorCode } : {}) });
+          else ledger.markUnknown(callId, { reason: "tool-no-trusted-result", ...(errorCode ? { errorCode } : {}) });
+          throw error;
+        }
         if (!output || !output.result || !Array.isArray(output.result.content) || typeof output.cacheHit !== "boolean") throw new AgentHostProcessError("tool-result");
         const resultDigest = agentDigest(output.result); if (local) {
           if (typeof output.receiptDigest !== "string") throw new AgentHostProcessError("tool-receipt"); ledger.completeCall(callId, { resultDigest, receiptDigest: output.receiptDigest }); receipts.push(output.receiptDigest);
@@ -71,7 +77,12 @@ export async function runAgentHostProcess({ attempt, ledger, invokeRound, execut
       } else if (request.type === "terminal.event") { settled = value.status === "completed"; if (!settled) forced = value.category ?? "agent-host"; child.stdin.end(); }
     };
     child.stdout.setEncoding("utf8"); child.stdout.on("data", (chunk) => { buffer += chunk; for (let at; (at = buffer.indexOf("\n")) >= 0;) {
-      const line = buffer.slice(0, at); buffer = buffer.slice(at + 1); if (line) chain = chain.then(() => handle(line)).catch((error) => { forced = error?.category ?? "protocol"; child.kill("SIGKILL"); }); } });
+      const line = buffer.slice(0, at); buffer = buffer.slice(at + 1); if (line) chain = chain.then(() => handle(line)).catch((error) => {
+        forced = error?.category ?? "protocol";
+        const detail = String(error?.message ?? "protocol failure").replace(/[^A-Za-z0-9 _:-]/gu, "").slice(0, 256);
+        diagnostics = `${diagnostics}${detail}`.slice(-1024);
+        child.kill("SIGKILL");
+      }); } });
     child.stderr.setEncoding("utf8"); child.stderr.on("data", (chunk) => { diagnostics = `${diagnostics}${chunk}`.slice(-1024); });
     child.once("error", () => { forced = "spawn"; }); child.once("close", () => { clearTimeout(timer); signal?.removeEventListener("abort", abort);
       void chain.finally(() => { if (settled && final) resolve(Object.freeze({ status: "completed", final, providerUsage, toolReceiptDigests: Object.freeze(receipts), checkpoints: Object.freeze(checkpoints) }));

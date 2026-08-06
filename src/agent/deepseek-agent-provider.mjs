@@ -22,8 +22,8 @@ const TOOL_SCHEMAS = Object.freeze({
   calculate_number: Object.freeze({ type: "object", additionalProperties: false,
     required: ["schemaVersion", "operation", "value", "from", "to", "precision", "rounding"],
     properties: { schemaVersion: { const: "number-calculation-request-v1" }, operation: { enum: ["scale", "convert-unit"] },
-      value: { type: "string", minLength: 1, maxLength: 128 }, from: { type: "string", minLength: 1, maxLength: 64 },
-      to: { type: "string", minLength: 1, maxLength: 64 }, precision: { type: "integer", minimum: 0, maximum: 18 },
+      value: { type: "string", pattern: "^-?(?:0|[1-9][0-9]{0,99})(?:\\.[0-9]{1,30})?$" }, from: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9-]{0,63}$" },
+      to: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9-]{0,63}$" }, precision: { type: "integer", minimum: 0, maximum: 18 },
       rounding: { enum: ["half-up", "half-even", "down"] } } }),
 });
 

@@ -13,7 +13,7 @@ const attempt = (toolNames = ["calculate_number"]) => ({ attemptId: randomUUID()
   targetLanguage: "zh-CN", sourceText: "焦点距離は50mmです。", protected: [], toolNames, maxOutputTokens: 1024 });
 
 function ledger() { const facts = { calls: [], outcomes: [], checkpoints: [], final: null }; return { facts,
-  beginCall(value) { facts.calls.push(value); return value; }, completeCall(id, value) { facts.outcomes.push({ id, ...value }); }, markUnknown(id) { facts.outcomes.push({ id, outcome: "unknown" }); },
+  beginCall(value) { facts.calls.push(value); return value; }, completeCall(id, value) { facts.outcomes.push({ id, ...value }); }, markUnknown(id) { facts.outcomes.push({ id, outcome: "unknown" }); }, cancelCall(id) { facts.outcomes.push({ id, outcome: "canceled" }); },
   acceptCheckpoint(_id, value) { const accepted = { ...value, transcriptDigest: agentDigest(value.messages) }; facts.checkpoints.push(accepted); return accepted; },
   acceptFinal(_id, value) { facts.final = value.final; return { final: value.final }; } }; }
 
@@ -40,4 +40,14 @@ test("tool-disabled Host exposes no tools and performs exactly one model round",
       assistantMessage: assistant([{ type: "text", text: "{\"translation\":\"无工具译文\"}" }], "stop", "final"), usage: budgetUsage() }; },
     executeTool: async () => { tools += 1; throw new Error("unreachable"); } });
   assert.equal(rounds, 1); assert.equal(tools, 0); assert.equal(result.final.translation, "无工具译文");
+});
+
+test("local tool failure closes the ledger call as canceled before Host stops", async () => {
+  const current = attempt(); const store = ledger();
+  await assert.rejects(() => runAgentHostProcess({ attempt: current, ledger: store,
+    invokeRound: async () => ({ responseId: "one", assistantMessage: assistant([{ type: "toolCall", id: "number-fail", name: "calculate_number",
+      arguments: { schemaVersion: "number-calculation-request-v1", operation: "convert-unit", value: "50", from: "mm", to: "cm", precision: 2, rounding: "half-even" } }], "toolUse", "one"), usage: budgetUsage() }),
+    executeTool: async () => { const error = new TypeError("invalid local tool request"); error.code = "NUMBER_REQUEST_INVALID"; throw error; } }), /Agent Host/);
+  assert.equal(store.facts.calls[1].kind, "local-tool");
+  assert.deepEqual(store.facts.outcomes.find((item) => item.id === store.facts.calls[1].callId), { id: store.facts.calls[1].callId, outcome: "canceled" });
 });
