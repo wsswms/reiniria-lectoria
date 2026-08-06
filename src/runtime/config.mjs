@@ -18,6 +18,8 @@ export function loadHttpConfig(env = process.env) {
     maxBodyBytes: positiveInteger(env.LECTORIA_MAX_BODY_BYTES, "LECTORIA_MAX_BODY_BYTES", 4 * 1024 * 1024),
     dataRoot,
     authToken: token,
+    adminPassword: env.LECTORIA_ADMIN_PASSWORD ?? token,
+    sessionTtlSeconds: positiveInteger(env.LECTORIA_SESSION_TTL_SECONDS, "LECTORIA_SESSION_TTL_SECONDS", 86_400),
     allowedOrigins,
     tls: Object.freeze({
       certFile: env.LECTORIA_TLS_CERT_FILE ?? null,

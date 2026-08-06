@@ -14,13 +14,13 @@ function request(url, options = {}) {
   });
 }
 
-async function withServer(api, config, fn) {
-  const server = createWorkflowHttpServer({ api, config });
+async function withServer(api, config, fn, extras = {}) {
+  const server = createWorkflowHttpServer({ api, config, ...extras });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try { return await fn(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
-const config = { authToken: "test-token", allowInsecure: false, maxBodyBytes: 1024, allowedOrigins: [] };
+const config = { authToken: "test-token", adminPassword: "test-password", sessionTtlSeconds: 3600, maxBodyBytes: 1024, allowedOrigins: [] };
 
 test("HTTP API authenticates and delegates through one application API", async () => {
   const calls = [];
@@ -31,7 +31,37 @@ test("HTTP API authenticates and delegates through one application API", async (
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true, data: { workflowId: "w" } });
   });
-  assert.deepEqual(calls, [{ command: "review", payload: { workflowId: "w", actor: { type: "user", id: "alice" } } }]);
+  assert.deepEqual(calls, [{ command: "review", payload: { workflowId: "w", actor: { type: "user", id: "owner" } } }]);
+});
+
+test("login creates an HttpOnly session cookie and logout revokes it", async () => {
+  await withServer({ execute() { return { ok: true }; } }, config, async (base) => {
+    const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
+    assert.equal(login.status, 200);
+    const cookie = login.headers["set-cookie"][0].split(";", 1)[0];
+    const session = await request(`${base}/api/v1/session`, { headers: { cookie } });
+    assert.equal(session.status, 200);
+    const logout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie } });
+    assert.equal(logout.status, 200);
+    assert.equal((await request(`${base}/api/v1/session`, { headers: { cookie } })).status, 401);
+  });
+});
+
+test("workspace HTTP routes require login and delegate to WorkspaceManager", async () => {
+  const calls = [];
+  const manager = { list() { calls.push(["list"]); return [{ workspaceId: "w", displayName: "Demo" }]; }, async createWorkspace(name) { calls.push(["create", name]); return { workspaceId: "new", displayName: name }; }, get(id) { calls.push(["get", id]); return { workspaceId: id, displayName: "Demo" }; } };
+  await withServer({ execute() {} }, config, async (base) => {
+    assert.equal((await request(`${base}/api/v1/workspaces`)).status, 401);
+    const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
+    const cookie = login.headers["set-cookie"][0].split(";", 1)[0];
+    const listed = await request(`${base}/api/v1/workspaces`, { headers: { cookie } });
+    assert.equal(listed.status, 200); assert.deepEqual((await listed.json()).data, [{ workspaceId: "w", displayName: "Demo" }]);
+    const created = await request(`${base}/api/v1/workspaces`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ displayName: "New" }) });
+    assert.equal(created.status, 201); assert.equal((await created.json()).data.displayName, "New");
+    const fetched = await request(`${base}/api/v1/workspaces/w`, { headers: { cookie } });
+    assert.equal(fetched.status, 200); assert.equal((await fetched.json()).data.workspaceId, "w");
+  }, { workspaceManager: manager });
+  assert.deepEqual(calls, [["list"], ["create", "New"], ["get", "w"]]);
 });
 
 test("HTTP API returns bounded JSON errors and health status", async () => {

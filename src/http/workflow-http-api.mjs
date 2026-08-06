@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const AUTH_COMMANDS = new Set([
   "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic",
@@ -10,6 +10,10 @@ const AUTH_COMMANDS = new Set([
 function sameSecret(actual, expected) {
   const a = Buffer.from(actual); const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function cookieValue(header, name) {
+  return String(header ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 }
 
 function jsonResponse(response, status, body, headers = {}) {
@@ -30,25 +34,69 @@ async function readJson(request, maxBodyBytes) {
   catch { throw Object.assign(new Error("request body must be valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); }
 }
 
-export function createWorkflowHttpHandler({ api, config, health = () => ({ status: "ok" }) }) {
+export function createWorkflowHttpHandler({ api, config, workspaceManager = null, health = () => ({ status: "ok" }) }) {
   if (!api || typeof api.execute !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
+  const sessions = new Map();
+  const sessionCookie = "lectoria_session";
+  const issueSession = () => { const token = randomBytes(32).toString("base64url"); sessions.set(token, Date.now() + config.sessionTtlSeconds * 1000); return token; };
+  const sessionUser = (request) => {
+    const cookie = cookieValue(request.headers.cookie, sessionCookie);
+    if (cookie && sessions.get(cookie) > Date.now()) return { token: cookie, id: "owner" };
+    const authorization = request.headers.authorization ?? "";
+    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (sameSecret(supplied, config.authToken)) return { token: null, id: "owner" };
+    return null;
+  };
   return async function workflowHttpHandler(request, response) {
     const origin = request.headers.origin;
     if (origin && config.allowedOrigins.length > 0 && !config.allowedOrigins.includes(origin)) return jsonResponse(response, 403, { ok: false, error: { code: "ORIGIN_DENIED", message: "origin is not allowed" } });
-    const cors = origin && config.allowedOrigins.includes(origin) ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
+    const cors = origin && config.allowedOrigins.includes(origin) ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" } : {};
     if (request.method === "OPTIONS") return jsonResponse(response, 204, {}, { ...cors, "access-control-allow-methods": "POST,GET,OPTIONS", "access-control-allow-headers": "authorization,content-type,x-csrf-token" });
     const url = new URL(request.url, "http://localhost");
     if (request.method === "GET" && url.pathname === "/healthz") return jsonResponse(response, 200, health(), cors);
+    if (request.method === "POST" && url.pathname === "/api/v1/session/login") {
+      try {
+        const input = await readJson(request, config.maxBodyBytes);
+        if (!input || typeof input.password !== "string" || !sameSecret(input.password, config.adminPassword)) throw Object.assign(new Error("invalid credentials"), { statusCode: 401, code: "UNAUTHENTICATED" });
+        const token = issueSession();
+        return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: "owner" } } }, { ...cors, "set-cookie": `${sessionCookie}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}` });
+      } catch (error) {
+        return jsonResponse(response, error.statusCode ?? 400, { ok: false, error: { code: error.code ?? "INVALID_REQUEST", message: error.message } }, cors);
+      }
+    }
+    const user = sessionUser(request);
+    if (request.method === "GET" && url.pathname === "/api/v1/session") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: user.id } } }, cors);
+    }
+    if (request.method === "POST" && url.pathname === "/api/v1/session/logout") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      if (user.token) sessions.delete(user.token);
+      return jsonResponse(response, 200, { ok: true, data: { loggedOut: true } }, { ...cors, "set-cookie": `${sessionCookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
+    }
+    if (workspaceManager && url.pathname === "/api/v1/workspaces" && (request.method === "GET" || request.method === "POST")) {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try {
+        const data = request.method === "GET" ? workspaceManager.list() : await workspaceManager.createWorkspace((await readJson(request, config.maxBodyBytes)).displayName);
+        return jsonResponse(response, request.method === "POST" ? 201 : 200, { ok: true, data }, cors);
+      } catch (error) {
+        return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "WORKSPACE_ERROR", message: error.message } }, cors);
+      }
+    }
+    const workspaceMatch = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)$/);
+    if (workspaceManager && workspaceMatch && request.method === "GET") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try { return jsonResponse(response, 200, { ok: true, data: workspaceManager.get(decodeURIComponent(workspaceMatch[1])) }, cors); }
+      catch (error) { return jsonResponse(response, error.statusCode ?? 404, { ok: false, error: { code: error.code ?? "WORKSPACE_ERROR", message: error.message } }, cors); }
+    }
     if (request.method !== "POST" || url.pathname !== "/api/v1/execute") return jsonResponse(response, 404, { ok: false, error: { code: "NOT_FOUND", message: "route not found" } }, cors);
-    const authorization = request.headers.authorization ?? "";
-    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-    if (!sameSecret(supplied, config.authToken)) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+    if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
     try {
       const input = await readJson(request, config.maxBodyBytes);
       if (!input || typeof input.command !== "string" || !input.payload || typeof input.payload !== "object") throw Object.assign(new Error("command and payload are required"), { statusCode: 400, code: "INVALID_REQUEST" });
       const payload = { ...input.payload };
-      if (AUTH_COMMANDS.has(input.command)) payload.actor = { type: "user", id: request.headers["x-lectoria-user"] ?? "web-user" };
+      if (AUTH_COMMANDS.has(input.command)) payload.actor = { type: "user", id: user.id };
       const data = await api.execute(input.command, payload);
       return jsonResponse(response, 200, { ok: true, data }, cors);
     } catch (error) {
