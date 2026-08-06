@@ -45,6 +45,8 @@ export const workflow = {
   approve: (workspaceId, workflowId, validationRunId, expectedWorkflowVersion) => workflow.execute("approve", { workspaceId, workflowId, validationRunId, expectedWorkflowVersion }),
   reviewList: (workspaceId, workflowId) => workflow.execute("review:list", { workspaceId, workflowId }),
   export: (workspaceId, workflowId, validationRunId, format) => workflow.execute("export", { workspaceId, workflowId, validationRunId, format }),
+  getFlow: (workspaceId, workflowId) => workflow.execute("flow:get", { workspaceId, workflowId }),
+  resolveFlow: (workspaceId, workflowId, expectedVersion, action, request = null) => workflow.execute("flow:resolve", { workspaceId, workflowId, expectedVersion, action, request }),
 };
 
 export const providerConfig = {

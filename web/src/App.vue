@@ -71,7 +71,7 @@ onMounted(restore);
                 <template v-else><n-tag type="info">Context：{{ contextState.head.state }}</n-tag><n-space v-if="contextState.head.state === 'pending-user'"><n-button type="success" :loading="busy" @click="decideContext('approved')">批准 Context</n-button><n-button secondary :loading="busy" @click="decideContext('rejected')">退回 Context</n-button></n-space><n-space v-if="contextState.head.state === 'approved' && !taskState"><n-select v-model:value="presetId" :options="translationPresets" placeholder="选择翻译 StagePreset" style="width:280px" /><n-button type="primary" :loading="busy" :disabled="!translationPresets.length" @click="enqueueTranslation">创建翻译任务</n-button></n-space><n-tag v-if="taskState" type="warning">任务：{{ taskState.task?.state ?? taskState.state }}</n-tag></template>
               </n-space>
             </n-card>
-            <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" />
+            <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" :translation-request="{ presetId, stage: 'translation' }" />
             <KnowledgePanel v-if="selected" :workspace-id="selected.workspaceId" />
           </n-space>
         </template>

@@ -78,6 +78,7 @@ export class WorkflowApi {
       case "qa:decide": return this.m5cQa.decideFinding(payload.qaRunId, payload.findingId, payload.decision, payload.actor);
       case "qa:retranslate": return this.remediation.retranslate(payload.qaRunId, payload.findingIds, payload.request, payload.actor);
       case "flow:resolve": return this.recovery.resolve(payload.workflowId, payload.expectedVersion, payload.action, payload.request ?? null, payload.actor);
+      case "flow:get": return this.recovery.get(payload.workflowId);
       case "research:propose": return this.research.propose(payload.workflowId, payload.request, payload.actor);
       case "research:submit": return this.research.submit(payload.requestId, payload.expectedVersion, payload.actor);
       case "research:decide": return this.research.decide(payload.requestId, payload.expectedVersion, payload.decision, payload.actor);

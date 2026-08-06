@@ -156,7 +156,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       }
       if (!selected || typeof selected.execute !== "function") throw new Error("workspace workflow API is unavailable");
       try {
-        if (input.command === "translation:enqueue" && providerConfiguration && payload.request?.presetId) {
+        if (["translation:enqueue", "flow:resolve"].includes(input.command) && providerConfiguration && payload.request?.presetId) {
           const preset = await providerConfiguration.resolvePreset({ stage: payload.request.stage ?? "translation", presetId: payload.request.presetId });
           payload.request = { ...payload.request, providerId: preset.sourceId, modelId: preset.modelId, thinking: preset.thinking,
             temperature: preset.temperature, toolNames: preset.toolNames, configDigest: preset.configDigest };
