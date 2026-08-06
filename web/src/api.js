@@ -15,3 +15,12 @@ export const workspaces = {
   list: () => request("/api/v1/workspaces"),
   create: (displayName) => request("/api/v1/workspaces", { method: "POST", body: JSON.stringify({ displayName }) }),
 };
+
+export const workflow = {
+  execute: (command, payload) => request("/api/v1/execute", { method: "POST", body: JSON.stringify({ command, payload }) }),
+  importDocument: (workspaceId, input) => workflow.execute("document:import", { workspaceId, ...input }),
+  getImport: (workspaceId, importId) => workflow.execute("document:get", { workspaceId, importId }),
+  confirmImport: (workspaceId, importId) => workflow.execute("document:confirm", { workspaceId, importId }),
+  create: (workspaceId, input) => workflow.execute("workflow:create", { workspaceId, ...input }),
+  get: (workspaceId, workflowId) => workflow.execute("workflow:get", { workspaceId, workflowId }),
+};

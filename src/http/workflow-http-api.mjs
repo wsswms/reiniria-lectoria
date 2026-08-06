@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const AUTH_COMMANDS = new Set([
-  "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic",
+  "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic", "workflow:create",
   "candidate:add", "candidate:select", "working-copy:edit", "warning:confirm",
   "quality:confirm-warning", "review", "approve", "internet:create", "internet:fetch",
   "proposal:create", "proposal:revise", "proposal:decide", "proposal:apply",
@@ -34,8 +34,8 @@ async function readJson(request, maxBodyBytes) {
   catch { throw Object.assign(new Error("request body must be valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); }
 }
 
-export function createWorkflowHttpHandler({ api, config, workspaceManager = null, health = () => ({ status: "ok" }) }) {
-  if (!api || typeof api.execute !== "function") throw new TypeError("workflow API is required");
+export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config, workspaceManager = null, health = () => ({ status: "ok" }) }) {
+  if ((!api || typeof api.execute !== "function") && typeof apiForWorkspace !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
   const sessions = new Map();
   const sessionCookie = "lectoria_session";
@@ -95,10 +95,22 @@ export function createWorkflowHttpHandler({ api, config, workspaceManager = null
     try {
       const input = await readJson(request, config.maxBodyBytes);
       if (!input || typeof input.command !== "string" || !input.payload || typeof input.payload !== "object") throw Object.assign(new Error("command and payload are required"), { statusCode: 400, code: "INVALID_REQUEST" });
+      const workspaceId = input.payload.workspaceId;
+      if (apiForWorkspace && (typeof workspaceId !== "string" || workspaceId.length === 0)) throw Object.assign(new Error("workspaceId is required"), { statusCode: 400, code: "WORKSPACE_REQUIRED" });
       const payload = { ...input.payload };
       if (AUTH_COMMANDS.has(input.command)) payload.actor = { type: "user", id: user.id };
-      const data = await api.execute(input.command, payload);
-      return jsonResponse(response, 200, { ok: true, data }, cors);
+      let selected = api;
+      let close = () => {};
+      if (apiForWorkspace) {
+        const scoped = await apiForWorkspace(workspaceId);
+        selected = scoped?.api ?? scoped;
+        close = typeof scoped?.close === "function" ? scoped.close : close;
+      }
+      if (!selected || typeof selected.execute !== "function") throw new Error("workspace workflow API is unavailable");
+      try {
+        const data = await selected.execute(input.command, payload);
+        return jsonResponse(response, 200, { ok: true, data }, cors);
+      } finally { close(); }
     } catch (error) {
       const unknownCommand = error.message === "unknown workflow command";
       const status = error.statusCode ?? (unknownCommand ? 400 : 422);
