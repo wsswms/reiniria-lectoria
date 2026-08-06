@@ -12,7 +12,9 @@ services:
       LECTORIA_AUTH_TOKEN: "${LECTORIA_AUTH_TOKEN:?set LECTORIA_AUTH_TOKEN in the environment}"
       LECTORIA_ADMIN_PASSWORD: "${LECTORIA_ADMIN_PASSWORD:?set LECTORIA_ADMIN_PASSWORD in the environment}"
       LECTORIA_COOKIE_SECURE: "${LECTORIA_COOKIE_SECURE:-false}"
-      LECTORIA_ALLOWED_ORIGINS: "${LECTORIA_ALLOWED_ORIGINS:-}"
+      # Safe local default for the bundled WebUI. LAN/custom-port deployments
+      # must explicitly override this with the exact WebUI origin(s).
+      LECTORIA_ALLOWED_ORIGINS: "${LECTORIA_ALLOWED_ORIGINS:-http://127.0.0.1:4176}"
       LECTORIA_TRANSLATION_MODE: "${LECTORIA_TRANSLATION_MODE:-fake}"
     volumes:
       - "${LECTORIA_DATA_DIR:-./data}:/var/lib/lectoria"

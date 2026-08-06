@@ -15,6 +15,7 @@ test("HTTP config defaults to loopback and validates bounded settings", () => {
   assert.equal(config.loginMaxAttempts, 5);
   assert.equal(config.loginWindowSeconds, 300);
   assert.equal(config.cookieSecure, false);
+  assert.deepEqual(config.allowedOrigins, []);
   assert.throws(() => loadHttpConfig({ LECTORIA_AUTH_TOKEN: "secret", LECTORIA_PORT: "0" }), /positive integer/);
   assert.throws(() => loadHttpConfig({ LECTORIA_AUTH_TOKEN: "secret", LECTORIA_COOKIE_SECURE: "yes" }), /true or false/);
 });

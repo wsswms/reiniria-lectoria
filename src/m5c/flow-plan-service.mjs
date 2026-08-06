@@ -184,6 +184,14 @@ export class FlowPlanService {
              workflow.state, workflow.version, workflow.updated_at AS updatedAt,
              flow.flow_state AS flowState, flow.outcome_state AS outcomeState,
              plan.state AS planState, context.state AS contextState
+             ,(SELECT task_id FROM translation_tasks task WHERE task.workspace_id = workflow.workspace_id
+                 AND task.workflow_id = workflow.workflow_id
+                 AND task.state IN ('queued','running','retry-wait','paused')
+                 ORDER BY task.created_at DESC, task.task_id DESC LIMIT 1) AS activeTaskId
+             ,(SELECT state FROM translation_tasks task WHERE task.workspace_id = workflow.workspace_id
+                 AND task.workflow_id = workflow.workflow_id
+                 AND task.state IN ('queued','running','retry-wait','paused')
+                 ORDER BY task.created_at DESC, task.task_id DESC LIMIT 1) AS activeTaskState
       FROM translation_workflows workflow
       JOIN translation_flow_controls flow
         ON flow.workspace_id = workflow.workspace_id AND flow.workflow_id = workflow.workflow_id

@@ -32,8 +32,11 @@ async function restoreWorkflow() {
   if (!saved) return;
   createdWorkflow.value = await workflow.get(selected.value.workspaceId, saved.workflowId);
   try { contextState.value = await workflow.getContext(selected.value.workspaceId, saved.workflowId); } catch { contextState.value = null; }
+  if (saved.activeTaskId) {
+    try { taskState.value = await workflow.getTask(selected.value.workspaceId, saved.activeTaskId); } catch { taskState.value = null; }
+  }
 }
-async function loadWorkspaces() { items.value = await workspaces.list(); if (!selected.value || !items.value.some((item) => item.workspaceId === selected.value.workspaceId)) selected.value = items.value[0] ?? null; await restoreWorkflow(); }
+async function loadWorkspaces(preferredWorkspaceId = null) { items.value = await workspaces.list(); if (preferredWorkspaceId && items.value.some((item) => item.workspaceId === preferredWorkspaceId)) selected.value = items.value.find((item) => item.workspaceId === preferredWorkspaceId); else if (!selected.value || !items.value.some((item) => item.workspaceId === selected.value.workspaceId)) selected.value = items.value[0] ?? null; await restoreWorkflow(); }
 async function selectWorkspace(item) { if (!item || item.workspaceId === selected.value?.workspaceId) return; selected.value = item; await restoreWorkflow(); }
 async function loadProviderConfig() { providerState.value = await providerConfig.list(); if (!modelOptions.value.some((item) => item.value === modelId.value)) modelId.value = modelOptions.value[0]?.value ?? ""; if (!translationPresets.value.some((item) => item.value === presetId.value)) presetId.value = translationPresets.value[0]?.value ?? ""; }
 async function restore() { try { await session.get(); loggedIn.value = true; await loadWorkspaces(); await loadProviderConfig(); } catch (cause) { if (cause.status !== 401) error.value = cause.message; } finally { loading.value = false; } }
@@ -101,7 +104,7 @@ onMounted(restore);
             <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" :translation-request="{ presetId, stage: 'translation' }" @candidate-selected="taskState = null" @segment-edited="taskState = null" />
             <KnowledgePanel v-if="selected" :workspace-id="selected.workspaceId" />
             <ProposalPanel v-if="selected" :workspace-id="selected.workspaceId" />
-            <BackupPanel v-if="selected" :workspace-id="selected.workspaceId" @restored="loadWorkspaces" />
+            <BackupPanel v-if="selected" :workspace-id="selected.workspaceId" @restored="(restored) => loadWorkspaces(restored.workspaceId)" />
           </n-space>
         </template>
       </n-layout-content>

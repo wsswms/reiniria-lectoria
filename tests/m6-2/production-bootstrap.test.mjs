@@ -83,6 +83,13 @@ test("production HTTP bootstrap executes document and workflow commands in the s
     });
     assert.equal(queuedResponse.status, 200); const queued = queuedResponse.json().data;
     assert.equal(queued.task.task.state, "queued");
+    const restoredListResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "workflow:list", payload: { workspaceId: workspace.workspaceId } }),
+    });
+    assert.equal(restoredListResponse.status, 200);
+    assert.equal(restoredListResponse.json().data.find((item) => item.workflowId === workflowId).activeTaskId, queued.task.task.task_id);
+    assert.equal(restoredListResponse.json().data.find((item) => item.workflowId === workflowId).activeTaskState, "queued");
     const taskResponse = await request(`${base}/api/v1/execute`, {
       method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
