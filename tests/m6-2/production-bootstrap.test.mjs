@@ -28,56 +28,58 @@ test("production HTTP bootstrap executes document and workflow commands in the s
   try {
     const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
     const cookie = login.headers["set-cookie"][0].split(";", 1)[0];
+    const csrfToken = login.json().data.csrfToken;
+    const authHeaders = { cookie, "content-type": "application/json", "x-csrf-token": csrfToken };
     const importedResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "document:import", payload: { workspaceId: workspace.workspaceId, format: "markdown", title: "Hello", content: "# Hello\n\nWorld" } }),
     });
     assert.equal(importedResponse.status, 200);
     const imported = importedResponse.json().data;
     const confirmedResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "document:confirm", payload: { workspaceId: workspace.workspaceId, importId: imported.importId } }),
     });
     assert.equal(confirmedResponse.status, 200);
     const workflowId = randomUUID();
     const workflowResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "workflow:create", payload: { workspaceId: workspace.workspaceId, importId: imported.importId, workflowId, targetLanguage: "zh-CN" } }),
     });
     assert.equal(workflowResponse.status, 200, JSON.stringify(workflowResponse.json()));
     let flow = workflowResponse.json().data;
     assert.equal(flow.workflow.workflowId, workflowId);
     const submittedResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "plan:submit", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: flow.planHead.version, actor: { type: "user", id: "forged" } } }),
     });
     assert.equal(submittedResponse.status, 200); flow = submittedResponse.json().data;
     assert.equal(flow.planHead.state, "pending-user");
     const approvedResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "plan:decide", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: flow.planHead.version, decision: "approved", actor: { type: "system", id: "forged" } } }),
     });
     assert.equal(approvedResponse.status, 200); assert.equal(approvedResponse.json().data.planHead.state, "approved");
     const assembledResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "context:assemble", payload: { workspaceId: workspace.workspaceId, workflowId, actor: { type: "user", id: "forged" } } }),
     });
     assert.equal(assembledResponse.status, 200); let context = assembledResponse.json().data;
     assert.equal(context.head.state, "pending-user");
     const contextDecision = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "context:decide", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: context.head.version, decision: "approved", actor: { type: "system", id: "forged" } } }),
     });
     assert.equal(contextDecision.status, 200); context = contextDecision.json().data;
     assert.equal(context.head.state, "approved");
     const queuedResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "translation:enqueue", payload: { workspaceId: workspace.workspaceId, workflowId, request: { providerId: "deepseek", modelId: "deepseek-v4-flash", idempotencyKey: "web-slice-translation-1" } } }),
     });
     assert.equal(queuedResponse.status, 200); const queued = queuedResponse.json().data;
     assert.equal(queued.task.task.state, "queued");
     const taskResponse = await request(`${base}/api/v1/execute`, {
-      method: "POST", headers: { cookie, "content-type": "application/json" },
+      method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
     });
     assert.equal(taskResponse.status, 200); assert.equal(taskResponse.json().data.task.state, "queued");

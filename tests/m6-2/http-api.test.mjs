@@ -39,9 +39,12 @@ test("login creates an HttpOnly session cookie and logout revokes it", async () 
     const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
     assert.equal(login.status, 200);
     const cookie = login.headers["set-cookie"][0].split(";", 1)[0];
+    const csrfToken = (await login.json()).data.csrfToken;
     const session = await request(`${base}/api/v1/session`, { headers: { cookie } });
     assert.equal(session.status, 200);
-    const logout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie } });
+    const deniedLogout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie } });
+    assert.equal(deniedLogout.status, 403); assert.equal((await deniedLogout.json()).error.code, "CSRF_DENIED");
+    const logout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie, "x-csrf-token": csrfToken } });
     assert.equal(logout.status, 200);
     assert.equal((await request(`${base}/api/v1/session`, { headers: { cookie } })).status, 401);
   });
@@ -54,9 +57,10 @@ test("workspace HTTP routes require login and delegate to WorkspaceManager", asy
     assert.equal((await request(`${base}/api/v1/workspaces`)).status, 401);
     const login = await request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
     const cookie = login.headers["set-cookie"][0].split(";", 1)[0];
+    const csrfToken = (await login.json()).data.csrfToken;
     const listed = await request(`${base}/api/v1/workspaces`, { headers: { cookie } });
     assert.equal(listed.status, 200); assert.deepEqual((await listed.json()).data, [{ workspaceId: "w", displayName: "Demo" }]);
-    const created = await request(`${base}/api/v1/workspaces`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ displayName: "New" }) });
+    const created = await request(`${base}/api/v1/workspaces`, { method: "POST", headers: { cookie, "content-type": "application/json", "x-csrf-token": csrfToken }, body: JSON.stringify({ displayName: "New" }) });
     assert.equal(created.status, 201); assert.equal((await created.json()).data.displayName, "New");
     const fetched = await request(`${base}/api/v1/workspaces/w`, { headers: { cookie } });
     assert.equal(fetched.status, 200); assert.equal((await fetched.json()).data.workspaceId, "w");

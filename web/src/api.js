@@ -1,14 +1,17 @@
+let csrfToken = null;
+
 async function request(path, options = {}) {
-  const response = await fetch(path, { credentials: "include", headers: { "content-type": "application/json", ...(options.headers ?? {}) }, ...options });
+  const method = options.method ?? "GET";
+  const response = await fetch(path, { credentials: "include", headers: { "content-type": "application/json", ...(method !== "GET" && csrfToken ? { "x-csrf-token": csrfToken } : {}), ...(options.headers ?? {}) }, ...options });
   const result = await response.json().catch(() => ({ ok: false, error: { message: "服务器返回了无效响应" } }));
   if (!response.ok || !result.ok) throw Object.assign(new Error(result.error?.message ?? "请求失败"), { code: result.error?.code, status: response.status });
   return result.data;
 }
 
 export const session = {
-  get: () => request("/api/v1/session"),
-  login: (password) => request("/api/v1/session/login", { method: "POST", body: JSON.stringify({ password }) }),
-  logout: () => request("/api/v1/session/logout", { method: "POST" }),
+  async get() { const data = await request("/api/v1/session"); csrfToken = data.csrfToken ?? null; return data; },
+  async login(password) { const data = await request("/api/v1/session/login", { method: "POST", body: JSON.stringify({ password }) }); csrfToken = data.csrfToken; return data; },
+  async logout() { const data = await request("/api/v1/session/logout", { method: "POST" }); csrfToken = null; return data; },
 };
 
 export const workspaces = {

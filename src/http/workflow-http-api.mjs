@@ -41,10 +41,12 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
   if (!config) throw new TypeError("HTTP config is required");
   const sessions = new Map();
   const sessionCookie = "lectoria_session";
-  const issueSession = () => { const token = randomBytes(32).toString("base64url"); sessions.set(token, Date.now() + config.sessionTtlSeconds * 1000); return token; };
+  const issueSession = () => { const token = randomBytes(32).toString("base64url"); const session = { expiresAt: Date.now() + config.sessionTtlSeconds * 1000, csrfToken: randomBytes(24).toString("base64url") }; sessions.set(token, session); return { token, ...session }; };
   const sessionUser = (request) => {
     const cookie = cookieValue(request.headers.cookie, sessionCookie);
-    if (cookie && sessions.get(cookie) > Date.now()) return { token: cookie, id: "owner" };
+    const session = cookie && sessions.get(cookie);
+    if (session && session.expiresAt > Date.now()) return { token: cookie, csrfToken: session.csrfToken, id: "owner" };
+    if (cookie && session) sessions.delete(cookie);
     const authorization = request.headers.authorization ?? "";
     const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
     if (sameSecret(supplied, config.authToken)) return { token: null, id: "owner" };
@@ -61,8 +63,8 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       try {
         const input = await readJson(request, config.maxBodyBytes);
         if (!input || typeof input.password !== "string" || !sameSecret(input.password, config.adminPassword)) throw Object.assign(new Error("invalid credentials"), { statusCode: 401, code: "UNAUTHENTICATED" });
-        const token = issueSession();
-        return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: "owner" } } }, { ...cors, "set-cookie": `${sessionCookie}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}` });
+        const session = issueSession();
+        return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: "owner" }, csrfToken: session.csrfToken } }, { ...cors, "set-cookie": `${sessionCookie}=${session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${config.sessionTtlSeconds}` });
       } catch (error) {
         return jsonResponse(response, error.statusCode ?? 400, { ok: false, error: { code: error.code ?? "INVALID_REQUEST", message: error.message } }, cors);
       }
@@ -70,8 +72,9 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
     const user = sessionUser(request);
     if (request.method === "GET" && url.pathname === "/api/v1/session") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
-      return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: user.id } } }, cors);
+      return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: user.id }, ...(user.csrfToken ? { csrfToken: user.csrfToken } : {}) } }, cors);
     }
+    if (user?.token && request.method !== "GET" && !sameSecret(request.headers["x-csrf-token"] ?? "", user.csrfToken)) return jsonResponse(response, 403, { ok: false, error: { code: "CSRF_DENIED", message: "CSRF token is missing or invalid" } }, cors);
     if (request.method === "POST" && url.pathname === "/api/v1/session/logout") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       if (user.token) sessions.delete(user.token);
