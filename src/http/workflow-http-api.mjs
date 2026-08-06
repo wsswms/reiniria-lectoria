@@ -1,6 +1,8 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { createWorkspaceBackup, restoreWorkspaceBackup, validateWorkspaceBackup } from "../storage/backup.mjs";
 
 const AUTH_COMMANDS = new Set([
   "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic", "workflow:create",
@@ -68,6 +70,13 @@ function jsonResponse(response, status, body, headers = {}) {
     "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...headers });
   response.end(encoded);
 }
+
+function backupId(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) throw Object.assign(new Error("backup id is invalid"), { statusCode: 400, code: "INVALID_BACKUP_ID" });
+  return value;
+}
+
+function backupRoot(config, workspaceManager) { return join(config.dataRoot ?? workspaceManager.root, "backups"); }
 
 async function readJson(request, maxBodyBytes) {
   const chunks = []; let size = 0;
@@ -189,6 +198,41 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       try { return jsonResponse(response, 200, { ok: true, data: workspaceManager.get(decodeURIComponent(workspaceMatch[1])) }, cors); }
       catch (error) { return jsonResponse(response, error.statusCode ?? 404, { ok: false, error: { code: error.code ?? "WORKSPACE_ERROR", message: error.message } }, cors); }
+    }
+    const workspaceBackupsMatch = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/backups$/);
+    if (workspaceManager && workspaceBackupsMatch && (request.method === "GET" || request.method === "POST")) {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      const workspaceId = decodeURIComponent(workspaceBackupsMatch[1]);
+      try {
+        const root = backupRoot(config, workspaceManager);
+        if (request.method === "POST") {
+          const handle = workspaceManager.open(workspaceId);
+          try {
+            const id = `${Date.now()}-${randomUUID()}`;
+            const manifest = await createWorkspaceBackup({ database: handle.database, workspaceRoot: handle.root, destination: join(root, id) });
+            return jsonResponse(response, 201, { ok: true, data: { backupId: id, workspaceId: manifest.workspace_id, schemaVersion: manifest.schema_version, manifestDigest: manifest.manifest_digest, objectCount: manifest.objects.length, portableFactCount: manifest.portable_facts.length } }, cors);
+          } finally { handle.database.close(); }
+        }
+        const entries = await readdir(join(root, ""), { withFileTypes: true }).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
+        const backups = [];
+        for (const entry of entries) {
+          if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(entry.name)) continue;
+          try {
+            const manifest = await validateWorkspaceBackup(join(root, entry.name));
+            if (manifest.workspace_id === workspaceId) backups.push({ backupId: entry.name, workspaceId, schemaVersion: manifest.schema_version, manifestDigest: manifest.manifest_digest, objectCount: manifest.objects.length, portableFactCount: manifest.portable_facts.length });
+          } catch { /* invalid backups are not presented as restorable */ }
+        }
+        backups.sort((a, b) => b.backupId.localeCompare(a.backupId));
+        return jsonResponse(response, 200, { ok: true, data: backups }, cors);
+      } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "BACKUP_ERROR", message: error.message } }, cors); }
+    }
+    if (workspaceManager && request.method === "POST" && url.pathname === "/api/v1/backups/restore") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try {
+        const input = await readJson(request, config.maxBodyBytes); const id = backupId(input?.backupId);
+        const restored = await restoreWorkspaceBackup({ backupRoot: join(backupRoot(config, workspaceManager), id), manager: workspaceManager });
+        return jsonResponse(response, 201, { ok: true, data: restored }, cors);
+      } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "BACKUP_RESTORE_ERROR", message: error.message } }, cors); }
     }
     const downloadMatch = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/exports\/([^/]+)\/download$/);
     if (downloadMatch && request.method === "GET") {

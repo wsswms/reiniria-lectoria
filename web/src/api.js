@@ -21,6 +21,12 @@ export const workspaces = {
   create: (displayName) => request("/api/v1/workspaces", { method: "POST", body: JSON.stringify({ displayName }) }),
 };
 
+export const backups = {
+  list: (workspaceId) => request(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/backups`),
+  create: (workspaceId) => request(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/backups`, { method: "POST", body: "{}" }),
+  restore: (backupId) => request("/api/v1/backups/restore", { method: "POST", body: JSON.stringify({ backupId }) }),
+};
+
 export const workflow = {
   execute: (command, payload) => request("/api/v1/execute", { method: "POST", body: JSON.stringify({ command, payload }) }),
   importDocument: (workspaceId, input) => workflow.execute("document:import", { workspaceId, ...input }),
