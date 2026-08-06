@@ -90,6 +90,17 @@ test("HTTP API returns bounded JSON errors and health status", async () => {
   });
 });
 
+test("diagnostics are authenticated and expose only bounded runtime metadata", async () => {
+  await withServer({ execute() {} }, config, async (base) => {
+    assert.equal((await request(`${base}/api/v1/diagnostics`)).status, 401);
+    const response = await request(`${base}/api/v1/diagnostics`, { headers: { authorization: "Bearer test-token" } });
+    assert.equal(response.status, 200);
+    const data = (await response.json()).data;
+    assert.equal(data.status, "ok"); assert.equal(typeof data.node, "string"); assert.equal(typeof data.uptimeSeconds, "number");
+    assert.equal("dataRoot" in data, false); assert.equal("adminPassword" in data, false); assert.equal("authToken" in data, false);
+  });
+});
+
 test("login attempts are bounded per remote address", async () => {
   await withServer({ execute() {} }, { ...config, loginMaxAttempts: 2, loginWindowSeconds: 60 }, async (base) => {
     const attempt = (password) => request(`${base}/api/v1/session/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });

@@ -1,4 +1,6 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const AUTH_COMMANDS = new Set([
   "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic", "workflow:create",
@@ -16,13 +18,36 @@ function sameSecret(actual, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+function sessionDigest(token) { return createHash("sha256").update(token).digest("hex"); }
+
+function loadSessions(file) {
+  if (!file) return new Map();
+  if (!existsSync(file)) return new Map();
+  const stat = lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error("session store must be a private regular file");
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  if (!Array.isArray(parsed)) throw new Error("session store is invalid");
+  return new Map(parsed.filter((item) => item && typeof item.digest === "string" && typeof item.expiresAt === "number" && typeof item.csrfToken === "string")
+    .map((item) => [item.digest, { expiresAt: item.expiresAt, csrfToken: item.csrfToken }]));
+}
+
+function persistSessions(file, sessions) {
+  if (!file) return;
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  const body = JSON.stringify([...sessions].map(([digest, session]) => ({ digest, ...session })));
+  writeFileSync(temp, body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  renameSync(temp, file);
+}
+
 function cookieValue(header, name) {
   return String(header ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 }
 
 function jsonResponse(response, status, body, headers = {}) {
   const encoded = Buffer.from(JSON.stringify(body));
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": encoded.length, ...headers });
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": encoded.length,
+    "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...headers });
   response.end(encoded);
 }
 
@@ -38,18 +63,19 @@ async function readJson(request, maxBodyBytes) {
   catch { throw Object.assign(new Error("request body must be valid JSON"), { statusCode: 400, code: "INVALID_JSON" }); }
 }
 
-export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config, workspaceManager = null, providerConfiguration = null, health = () => ({ status: "ok" }) }) {
+export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config, workspaceManager = null, providerConfiguration = null, health = () => ({ status: "ok" }), diagnostics = null }) {
   if ((!api || typeof api.execute !== "function") && typeof apiForWorkspace !== "function") throw new TypeError("workflow API is required");
   if (!config) throw new TypeError("HTTP config is required");
-  const sessions = new Map();
+  const sessions = loadSessions(config.sessionStoreFile);
   const loginFailures = new Map();
   const sessionCookie = "lectoria_session";
-  const issueSession = () => { const token = randomBytes(32).toString("base64url"); const session = { expiresAt: Date.now() + config.sessionTtlSeconds * 1000, csrfToken: randomBytes(24).toString("base64url") }; sessions.set(token, session); return { token, ...session }; };
+  const issueSession = () => { const token = randomBytes(32).toString("base64url"); const session = { expiresAt: Date.now() + config.sessionTtlSeconds * 1000, csrfToken: randomBytes(24).toString("base64url") }; sessions.set(config.sessionStoreFile ? sessionDigest(token) : token, session); persistSessions(config.sessionStoreFile, sessions); return { token, ...session }; };
   const sessionUser = (request) => {
     const cookie = cookieValue(request.headers.cookie, sessionCookie);
-    const session = cookie && sessions.get(cookie);
+    const key = cookie && (config.sessionStoreFile ? sessionDigest(cookie) : cookie);
+    const session = key && sessions.get(key);
     if (session && session.expiresAt > Date.now()) return { token: cookie, csrfToken: session.csrfToken, id: "owner" };
-    if (cookie && session) sessions.delete(cookie);
+    if (cookie && session) { sessions.delete(key); persistSessions(config.sessionStoreFile, sessions); }
     const authorization = request.headers.authorization ?? "";
     const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
     if (sameSecret(supplied, config.authToken)) return { token: null, id: "owner" };
@@ -83,6 +109,15 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       }
     }
     const user = sessionUser(request);
+    if (request.method === "GET" && url.pathname === "/api/v1/diagnostics") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      try {
+        const data = typeof diagnostics === "function" ? await diagnostics() : { status: "ok", service: "lectoria", node: process.versions.node, uptimeSeconds: Math.floor(process.uptime()), tlsEnabled: Boolean(config.tls?.certFile) };
+        return jsonResponse(response, 200, { ok: true, data }, { ...cors, "cache-control": "no-store" });
+      } catch (error) {
+        return jsonResponse(response, 503, { ok: false, error: { code: "DIAGNOSTICS_UNAVAILABLE", message: "diagnostics unavailable" } }, cors);
+      }
+    }
     if (request.method === "GET" && url.pathname === "/api/v1/session") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       return jsonResponse(response, 200, { ok: true, data: { user: { type: "user", id: user.id }, ...(user.csrfToken ? { csrfToken: user.csrfToken } : {}) } }, cors);
@@ -90,7 +125,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
     if (user?.token && request.method !== "GET" && !sameSecret(request.headers["x-csrf-token"] ?? "", user.csrfToken)) return jsonResponse(response, 403, { ok: false, error: { code: "CSRF_DENIED", message: "CSRF token is missing or invalid" } }, cors);
     if (request.method === "POST" && url.pathname === "/api/v1/session/logout") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
-      if (user.token) sessions.delete(user.token);
+      if (user.token) { sessions.delete(config.sessionStoreFile ? sessionDigest(user.token) : user.token); persistSessions(config.sessionStoreFile, sessions); }
       return jsonResponse(response, 200, { ok: true, data: { loggedOut: true } }, { ...cors, "set-cookie": `${sessionCookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
     }
     if (providerConfiguration && url.pathname === "/api/v1/provider-config" && request.method === "GET") {

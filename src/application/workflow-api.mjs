@@ -52,6 +52,7 @@ export class WorkflowApi {
         }, payload.actor);
       }
       case "workflow:get": return this.flowPlans.get(payload.workflowId);
+      case "workflow:list": return this.flowPlans.list();
       case "plan:revise": return this.flowPlans.revisePlan(payload.workflowId, payload.expectedVersion, payload.plan, payload.actor);
       case "plan:assist": return this.planner.execute(payload.workflowId, payload.request);
       case "plan:submit": return this.flowPlans.submitPlan(payload.workflowId, payload.expectedVersion, payload.actor);

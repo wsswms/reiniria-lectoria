@@ -49,6 +49,11 @@ test("production HTTP bootstrap executes document and workflow commands in the s
     assert.equal(workflowResponse.status, 200, JSON.stringify(workflowResponse.json()));
     let flow = workflowResponse.json().data;
     assert.equal(flow.workflow.workflowId, workflowId);
+    const listedWorkflowsResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "workflow:list", payload: { workspaceId: workspace.workspaceId } }),
+    });
+    assert.equal(listedWorkflowsResponse.status, 200); assert.equal(listedWorkflowsResponse.json().data.some((item) => item.workflowId === workflowId), true);
     const submittedResponse = await request(`${base}/api/v1/execute`, {
       method: "POST", headers: authHeaders,
       body: JSON.stringify({ command: "plan:submit", payload: { workspaceId: workspace.workspaceId, workflowId, expectedVersion: flow.planHead.version, actor: { type: "user", id: "forged" } } }),
