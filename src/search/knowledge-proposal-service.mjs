@@ -141,6 +141,9 @@ export class KnowledgeProposalService {
       WHERE proposal.workspace_id = ? AND proposal.proposal_id = ?`).get(this.workspaceId, proposalId);
     if (!row) throw new ProposalConflictError("proposal not found");
     const status = this.currentStatus(row);
+    const application = this.database.prepare(`SELECT application_id AS applicationId, proposal_revision_id AS proposalRevisionId,
+      fact_id AS factId, fact_revision_id AS factRevisionId, actor_id AS actorId, applied_at AS appliedAt
+      FROM knowledge_proposal_applications WHERE workspace_id = ? AND proposal_id = ?`).get(this.workspaceId, row.proposalId);
     return Object.freeze({ proposalId: row.proposalId, originKind: row.originKind, investigationId: row.investigationId,
       researchRunId: row.researchRunId, workflowId: row.workflowId,
       segmentId: row.segmentId, revision: Object.freeze({ proposalRevisionId: row.proposalRevisionId,
@@ -149,7 +152,18 @@ export class KnowledgeProposalService {
         factId: row.factId, baseFactRevisionId: row.baseFactRevisionId, proposedSource: JSON.parse(row.proposedSourceJson),
         proposedSourceDigest: row.proposedSourceDigest, proposalPolicyVersion: row.proposalPolicyVersion }),
       head: Object.freeze({ proposalRevisionId: row.proposalRevisionId, revisionVersion: row.revisionVersion,
-        version: row.headVersion, state: row.state, updatedAt: row.updatedAt }), current: status.current, staleReason: status.reason });
+        version: row.headVersion, state: row.state, updatedAt: row.updatedAt }), current: status.current, staleReason: status.reason,
+      application: application ? Object.freeze(application) : null });
+  }
+
+  list({ state = null, limit = 100 } = {}) {
+    if (state !== null && !new Set(["draft", "approved", "rejected"]).has(state)) throw new TypeError("proposal state is invalid");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new TypeError("proposal limit is invalid");
+    const rows = this.database.prepare(`SELECT proposal_id AS proposalId
+      FROM knowledge_proposal_heads
+      WHERE workspace_id = ? ${state ? "AND state = ?" : ""}
+      ORDER BY updated_at DESC, proposal_id DESC LIMIT ?`).all(...(state ? [this.workspaceId, state, limit] : [this.workspaceId, limit]));
+    return Object.freeze(rows.map(({ proposalId }) => this.get(proposalId)));
   }
 
   currentStatus(rowOrId) {

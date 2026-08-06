@@ -177,6 +177,33 @@ export class FlowPlanService {
     return Object.freeze({ workflow: Object.freeze(workflow), flow: Object.freeze(flow), planHead: Object.freeze(head), plan: contextPlanContract(JSON.parse(row.planJson)) });
   }
 
+  list() {
+    return Object.freeze(this.database.prepare(`
+      SELECT workflow.workflow_id AS workflowId, workflow.document_id AS documentId,
+             workflow.source_revision_id AS sourceRevisionId, workflow.target_language AS targetLanguage,
+             workflow.state, workflow.version, workflow.updated_at AS updatedAt,
+             flow.flow_state AS flowState, flow.outcome_state AS outcomeState,
+             plan.state AS planState, context.state AS contextState
+             ,(SELECT task_id FROM translation_tasks task WHERE task.workspace_id = workflow.workspace_id
+                 AND task.workflow_id = workflow.workflow_id
+                 AND task.state IN ('queued','running','retry-wait','paused')
+                 ORDER BY task.created_at DESC, task.task_id DESC LIMIT 1) AS activeTaskId
+             ,(SELECT state FROM translation_tasks task WHERE task.workspace_id = workflow.workspace_id
+                 AND task.workflow_id = workflow.workflow_id
+                 AND task.state IN ('queued','running','retry-wait','paused')
+                 ORDER BY task.created_at DESC, task.task_id DESC LIMIT 1) AS activeTaskState
+      FROM translation_workflows workflow
+      JOIN translation_flow_controls flow
+        ON flow.workspace_id = workflow.workspace_id AND flow.workflow_id = workflow.workflow_id
+      LEFT JOIN translation_context_plan_heads plan
+        ON plan.workspace_id = workflow.workspace_id AND plan.workflow_id = workflow.workflow_id
+      LEFT JOIN temporary_context_heads context
+        ON context.workspace_id = workflow.workspace_id AND context.workflow_id = workflow.workflow_id
+      WHERE workflow.workspace_id = ?
+      ORDER BY workflow.updated_at DESC, workflow.workflow_id DESC
+    `).all(this.workspaceId).map(Object.freeze));
+  }
+
   getGuidance(guidanceId) {
     const row = this.database.prepare(`SELECT head.version, head.state, revision.raw_text AS rawText, revision.interpretation_json AS interpretationJson,
       revision.guidance_revision_id AS guidanceRevisionId, revision.guidance_id AS guidanceId, revision.workflow_id AS workflowId,

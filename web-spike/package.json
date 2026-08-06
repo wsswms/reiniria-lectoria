@@ -1,0 +1,15 @@
+{
+  "name": "lectoria-web-spike",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0 <23" },
+  "scripts": { "build": "vite build", "preview": "node preview.mjs" },
+  "dependencies": {
+    "naive-ui": "2.44.1",
+    "vue": "3.5.41"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.1",
+    "vite": "7.3.6"
+  }
+}

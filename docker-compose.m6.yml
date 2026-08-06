@@ -1,0 +1,47 @@
+services:
+  lectoria-http:
+    build:
+      context: .
+      dockerfile: Dockerfile.m6-production
+    ports:
+      - "${LECTORIA_PORT:-8787}:8787"
+    environment:
+      LECTORIA_HOST: "0.0.0.0"
+      LECTORIA_PORT: "8787"
+      LECTORIA_DATA_ROOT: "/var/lib/lectoria"
+      LECTORIA_AUTH_TOKEN: "${LECTORIA_AUTH_TOKEN:?set LECTORIA_AUTH_TOKEN in the environment}"
+      LECTORIA_ADMIN_PASSWORD: "${LECTORIA_ADMIN_PASSWORD:?set LECTORIA_ADMIN_PASSWORD in the environment}"
+      LECTORIA_COOKIE_SECURE: "${LECTORIA_COOKIE_SECURE:-false}"
+      # Safe local default for the bundled WebUI. LAN/custom-port deployments
+      # must explicitly override this with the exact WebUI origin(s).
+      LECTORIA_ALLOWED_ORIGINS: "${LECTORIA_ALLOWED_ORIGINS:-http://127.0.0.1:4176}"
+      LECTORIA_TRANSLATION_MODE: "${LECTORIA_TRANSLATION_MODE:-fake}"
+    volumes:
+      - "${LECTORIA_DATA_DIR:-./data}:/var/lib/lectoria"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  lectoria-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "${LECTORIA_WEB_PORT:-4176}:4176"
+    environment:
+      PORT: "4176"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - lectoria-http
+    restart: unless-stopped

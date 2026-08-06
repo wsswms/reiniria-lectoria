@@ -1,11 +1,12 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
-    retriever = null, integrity = null }) {
+  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, quality = null, reviews, exports,
+    retriever = null, integrity = null, manualKnowledge = null, knowledgeProposals = null, knowledgeIterations = null }) {
     this.imports = imports;
     this.reimports = reimports;
     this.flowPlans = flowPlans;
     this.planner = planner;
     this.contexts = contexts;
+    this.translationExecutor = translationExecutor;
     this.m5cQa = m5cQa;
     this.modelQa = modelQa;
     this.remediation = remediation;
@@ -14,10 +15,14 @@ export class WorkflowApi {
     this.research = research;
     this.workCopies = workCopies;
     this.validation = validation;
+    this.quality = quality;
     this.reviews = reviews;
     this.exports = exports;
     this.retriever = retriever;
     this.integrity = integrity;
+    this.manualKnowledge = manualKnowledge;
+    this.knowledgeProposals = knowledgeProposals;
+    this.knowledgeIterations = knowledgeIterations;
   }
 
   execute(command, payload) {
@@ -49,6 +54,7 @@ export class WorkflowApi {
         }, payload.actor);
       }
       case "workflow:get": return this.flowPlans.get(payload.workflowId);
+      case "workflow:list": return this.flowPlans.list();
       case "plan:revise": return this.flowPlans.revisePlan(payload.workflowId, payload.expectedVersion, payload.plan, payload.actor);
       case "plan:assist": return this.planner.execute(payload.workflowId, payload.request);
       case "plan:submit": return this.flowPlans.submitPlan(payload.workflowId, payload.expectedVersion, payload.actor);
@@ -61,6 +67,11 @@ export class WorkflowApi {
       case "context:get": return this.contexts.get(payload.workflowId);
       case "context:decide": return this.contexts.decide(payload.workflowId, payload.expectedVersion, payload.decision, payload.actor);
       case "translation:enqueue": return this.contexts.enqueueTranslation(payload.workflowId, payload.request);
+      case "translation:task-get": return this.contexts.tasks.getTask(payload.taskId);
+      case "translation:run-next": {
+        if (!this.translationExecutor) throw new TypeError("translation executor is unavailable");
+        return this.translationExecutor.executeNext();
+      }
       case "qa:run": {
         const options = payload.options ?? {};
         if (options.modelFindings !== undefined || options.layers?.includes("model")) throw new TypeError("model QA must use the controlled model QA executor");
@@ -70,7 +81,11 @@ export class WorkflowApi {
       case "qa:get": return this.m5cQa.get(payload.qaRunId);
       case "qa:decide": return this.m5cQa.decideFinding(payload.qaRunId, payload.findingId, payload.decision, payload.actor);
       case "qa:retranslate": return this.remediation.retranslate(payload.qaRunId, payload.findingIds, payload.request, payload.actor);
+      case "quality:run": return this.quality.runWorking(payload.workflowId, payload.options ?? {});
+      case "quality:get": return this.quality.get(payload.qualityRunId);
+      case "quality:confirm-warning": return this.quality.confirmWarning(payload.workflowId, payload.qualityRunId, payload.findingId, payload.actor);
       case "flow:resolve": return this.recovery.resolve(payload.workflowId, payload.expectedVersion, payload.action, payload.request ?? null, payload.actor);
+      case "flow:get": return this.recovery.get(payload.workflowId);
       case "research:propose": return this.research.propose(payload.workflowId, payload.request, payload.actor);
       case "research:submit": return this.research.submit(payload.requestId, payload.expectedVersion, payload.actor);
       case "research:decide": return this.research.decide(payload.requestId, payload.expectedVersion, payload.decision, payload.actor);
@@ -94,8 +109,17 @@ export class WorkflowApi {
       case "approve": return this.reviews.approve(payload.workflowId, payload.validationRunId, payload.expectedWorkflowVersion, payload.actor, payload.qualityRunId ?? null);
       case "review:list": return this.reviews.getEvents(payload.workflowId);
       case "export": return this.exports.export(payload.workflowId, payload.validationRunId, payload.format, payload.qualityRunId ?? null);
+      case "export:download": return this.exports.download(payload.exportId);
       case "knowledge:rebuild": return this.retriever.rebuild();
       case "knowledge:search": return this.retriever.search(payload.request);
+      case "knowledge:fact-list": return this.manualKnowledge.list(payload);
+      case "knowledge:fact-create": return this.manualKnowledge.create(payload, payload.actor);
+      case "knowledge:fact-revise": return this.manualKnowledge.revise(payload, payload.actor);
+      case "knowledge:fact-state": return this.manualKnowledge.setState(payload, payload.actor);
+      case "knowledge-proposal:list": return this.knowledgeProposals.list(payload);
+      case "knowledge-proposal:get": return this.knowledgeProposals.get(payload.proposalId);
+      case "knowledge-proposal:decide": return this.knowledgeProposals.decide(payload.proposalId, payload.expectedVersion, payload.decision, payload.actor);
+      case "knowledge-proposal:apply": return this.knowledgeIterations.apply(payload.proposalId, payload.actor);
       case "knowledge:diagnose": return this.integrity.diagnose();
       case "knowledge:repair-derived": return this.integrity.repairDerived();
       default: throw new TypeError("unknown workflow command");

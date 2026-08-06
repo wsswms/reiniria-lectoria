@@ -12,7 +12,7 @@ export class BrokerProcessError extends Error {
 }
 
 export function invokeBrokerProcess({ request, credentialRef, credential, credentialFd, auditFd, evaluationScope, faultMode }, {
-  entry = new URL("./broker-entry.mjs", import.meta.url), timeoutMs = 5_000, outputBytes = 4 * 1024 * 1024,
+  entry = new URL("./broker-entry.mjs", import.meta.url), timeoutMs = 5_000, outputBytes = 4 * 1024 * 1024, signal,
 } = {}) {
   const stringCredential = typeof credential === "string";
   const descriptorCredential = Number.isSafeInteger(credentialFd) && credentialFd >= 0;
@@ -35,6 +35,8 @@ export function invokeBrokerProcess({ request, credentialRef, credential, creden
       forcedCategory = "unknown-outcome";
       child.kill("SIGKILL");
     }, timeoutMs);
+    const onAbort = () => { forcedCategory = "canceled"; child.kill("SIGKILL"); };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk) => {
       bytes += chunk.length;
       if (bytes > outputBytes) {
@@ -45,6 +47,7 @@ export function invokeBrokerProcess({ request, credentialRef, credential, creden
     child.once("error", () => reject(new BrokerProcessError("provider")));
     child.once("close", () => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (forcedCategory) return reject(new BrokerProcessError(forcedCategory));
       try {
         const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));

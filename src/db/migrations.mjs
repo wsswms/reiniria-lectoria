@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CURRENT_SCHEMA_VERSION = 31;
+export const CURRENT_SCHEMA_VERSION = 32;
 
 export const MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -3499,6 +3499,29 @@ export const MIGRATIONS = Object.freeze([
       BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
       CREATE TRIGGER agent_runtime_checkpoints_no_delete BEFORE DELETE ON agent_runtime_checkpoints
       BEGIN SELECT RAISE(ABORT, 'agent runtime checkpoint is immutable'); END;
+    `,
+  }),
+  Object.freeze({
+    version: 32,
+    name: "translation-attempt-config-snapshot",
+    sql: `
+      CREATE TABLE translation_attempt_config_snapshots (
+        workspace_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        config_digest TEXT NOT NULL CHECK(length(config_digest) = 71 AND substr(config_digest, 1, 7) = 'sha256:'),
+        snapshot_json TEXT NOT NULL CHECK(json_valid(snapshot_json) AND json_type(snapshot_json) = 'object'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, attempt_id),
+        FOREIGN KEY (workspace_id, attempt_id, task_id) REFERENCES translation_attempts(workspace_id, attempt_id, task_id)
+      ) STRICT;
+      CREATE TRIGGER translation_attempt_config_snapshots_no_update BEFORE UPDATE ON translation_attempt_config_snapshots
+      BEGIN SELECT RAISE(ABORT, 'translation attempt config snapshot is immutable'); END;
+      CREATE TRIGGER translation_attempt_config_snapshots_no_delete BEFORE DELETE ON translation_attempt_config_snapshots
+      BEGIN SELECT RAISE(ABORT, 'translation attempt config snapshot is immutable'); END;
     `,
   }),
 ]);

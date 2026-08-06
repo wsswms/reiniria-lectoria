@@ -88,6 +88,10 @@ export class FlowRecoveryService {
     }).immediate();
   }
 
+  get(workflowId) {
+    return Object.freeze(this.#flow(workflowId));
+  }
+
   #unresolvedTranslationSegments(workflowId) {
     return this.database.prepare(`SELECT DISTINCT attempt.segment_id AS segmentId
       FROM translation_attempts attempt
