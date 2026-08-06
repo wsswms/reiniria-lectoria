@@ -38,13 +38,20 @@ test("authenticated backup API creates, lists and restores a workspace without a
     assert.equal(listed.status, 200, JSON.stringify(listed.json())); assert.equal(listed.json().data[0].backupId, backup.backupId);
     const invalid = await request(`${first.base}/api/v1/backups/restore`, { method: "POST", headers: first.headers, body: JSON.stringify({ backupId: "../escape" }) });
     assert.equal(invalid.status, 400); assert.equal(invalid.json().error.code, "INVALID_BACKUP_ID");
+    const sameControlPlane = await request(`${first.base}/api/v1/backups/restore`, { method: "POST", headers: first.headers, body: JSON.stringify({ backupId: backup.backupId }) });
+    assert.equal(sameControlPlane.status, 201, JSON.stringify(sameControlPlane.json()));
+    const reboundWorkspaceId = sameControlPlane.json().data.workspaceId;
+    assert.notEqual(reboundWorkspaceId, workspace.workspaceId);
+    const rebound = manager.open(reboundWorkspaceId);
+    try { assert.equal(rebound.database.prepare("SELECT workspace_id AS workspaceId FROM workspace_meta").get().workspaceId, reboundWorkspaceId); }
+    finally { rebound.database.close(); }
     await new Promise((resolve) => first.server.close(resolve));
     manager.close();
     const restoredManager = await WorkspaceManager.create(restoreRoot); const second = await start(restoredManager, root);
     try {
       const restored = await request(`${second.base}/api/v1/backups/restore`, { method: "POST", headers: second.headers, body: JSON.stringify({ backupId: backup.backupId }) });
-      assert.equal(restored.status, 201, JSON.stringify(restored.json())); assert.equal(restored.json().data.workspaceId, workspace.workspaceId);
-      assert.equal(restoredManager.list().some((item) => item.workspaceId === workspace.workspaceId), true);
+      assert.equal(restored.status, 201, JSON.stringify(restored.json())); assert.notEqual(restored.json().data.workspaceId, workspace.workspaceId);
+      assert.equal(restoredManager.list().some((item) => item.workspaceId === restored.json().data.workspaceId), true);
     } finally { await new Promise((resolve) => second.server.close(resolve)); restoredManager.close(); }
   } finally { await rm(root, { recursive: true, force: true }); await rm(restoreRoot, { recursive: true, force: true }); }
 });

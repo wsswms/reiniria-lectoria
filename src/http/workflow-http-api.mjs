@@ -253,7 +253,7 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
       try {
         const input = await readJson(request, config.maxBodyBytes); const id = backupId(input?.backupId);
-        const restored = await restoreWorkspaceBackup({ backupRoot: join(backupRoot(config, workspaceManager), id), manager: workspaceManager });
+        const restored = await restoreWorkspaceBackup({ backupRoot: join(backupRoot(config, workspaceManager), id), manager: workspaceManager, targetWorkspaceId: randomUUID() });
         return jsonResponse(response, 201, { ok: true, data: restored }, cors);
       } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "BACKUP_RESTORE_ERROR", message: error.message } }, cors); }
     }

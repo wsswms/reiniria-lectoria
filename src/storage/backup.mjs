@@ -4,7 +4,7 @@ import { dirname, join, relative, sep } from "node:path";
 import Database from "better-sqlite3";
 import { assertDatabaseIntegrity, openWorkspaceDatabase } from "../db/connection.mjs";
 import { CURRENT_SCHEMA_VERSION } from "../db/migrations.mjs";
-import { stableJson } from "../domain/contracts.mjs";
+import { opaqueId, stableJson } from "../domain/contracts.mjs";
 import { validateRelativeWorkspacePath } from "../workspace/path-guard.mjs";
 import { rebuildDerived } from "./derived-store.mjs";
 
@@ -128,17 +128,46 @@ export async function validateWorkspaceBackup(backupRoot) {
   return Object.freeze(manifest);
 }
 
-export async function restoreWorkspaceBackup({ backupRoot, manager }) {
+function quoteIdentifier(value) { return `"${value.replaceAll('"', '""')}"`; }
+
+function rebindWorkspaceDatabase(filename, sourceWorkspaceId, targetWorkspaceId) {
+  if (sourceWorkspaceId === targetWorkspaceId) return;
+  opaqueId(targetWorkspaceId, "targetWorkspaceId");
+  const database = new Database(filename);
+  try {
+    database.pragma("foreign_keys = OFF");
+    const triggers = database.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL ORDER BY name").all();
+    const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    database.transaction(() => {
+      for (const trigger of triggers) database.exec(`DROP TRIGGER ${quoteIdentifier(trigger.name)}`);
+      for (const table of tables) {
+        const columns = database.prepare(`PRAGMA table_info(${quoteIdentifier(table.name)})`).all();
+        if (columns.some((column) => column.name === "workspace_id")) {
+          database.prepare(`UPDATE ${quoteIdentifier(table.name)} SET workspace_id = ? WHERE workspace_id = ?`).run(targetWorkspaceId, sourceWorkspaceId);
+        }
+      }
+      for (const trigger of triggers) database.exec(trigger.sql);
+    })();
+    database.pragma("foreign_keys = ON");
+    assertDatabaseIntegrity(database);
+    const identity = database.prepare("SELECT workspace_id AS workspaceId FROM workspace_meta").all();
+    if (identity.length !== 1 || identity[0].workspaceId !== targetWorkspaceId) throw new Error("workspace restore rebind failed");
+  } finally { database.close(); }
+}
+
+export async function restoreWorkspaceBackup({ backupRoot, manager, targetWorkspaceId = null }) {
   const manifest = await validateWorkspaceBackup(backupRoot);
-  if (manager.registry.get(manifest.workspace_id) || manager.registry.list().some((row) => row.rootKey === manifest.workspace_id)) throw new Error("workspace restore conflict");
-  const finalRoot = join(manager.root, "workspaces", manifest.workspace_id);
+  const workspaceId = targetWorkspaceId === null ? manifest.workspace_id : opaqueId(targetWorkspaceId, "targetWorkspaceId");
+  if (manager.registry.get(workspaceId) || manager.registry.list().some((row) => row.rootKey === workspaceId)) throw new Error("workspace restore conflict");
+  const finalRoot = join(manager.root, "workspaces", workspaceId);
   if (await stat(finalRoot).then(() => true, (error) => error?.code === "ENOENT" ? false : Promise.reject(error))) throw new Error("workspace restore conflict");
-  const temporary = join(manager.root, "workspaces", `.restoring-${manifest.workspace_id}-${randomUUID()}`);
+  const temporary = join(manager.root, "workspaces", `.restoring-${workspaceId}-${randomUUID()}`);
   let activated = false;
   await mkdir(join(temporary, "state"), { recursive: true });
   for (const directory of ["private/objects", "private/ledger", "derived", "staging", ...PORTABLE_FACT_DIRECTORIES]) await mkdir(join(temporary, directory), { recursive: true });
   try {
     await cp(join(backupRoot, "database.sqlite3"), join(temporary, "state", "app.sqlite3"));
+    rebindWorkspaceDatabase(join(temporary, "state", "app.sqlite3"), manifest.workspace_id, workspaceId);
     for (const object of manifest.objects) {
       const target = join(temporary, "private", "objects", "sha256", object.digest.slice(7, 9), object.digest.slice(9));
       await mkdir(dirname(target), { recursive: true });
@@ -150,15 +179,15 @@ export async function restoreWorkspaceBackup({ backupRoot, manager }) {
       await mkdir(dirname(target), { recursive: true });
       await cp(join(backupRoot, "facts", ...path.split("/")), target);
     }
-    await writeFile(join(temporary, "workspace.yaml"), `${stableJson({ schemaVersion: manifest.schema_version, workspaceId: manifest.workspace_id })}\n`);
-    const database = openWorkspaceDatabase(join(temporary, "state", "app.sqlite3"), { workspaceId: manifest.workspace_id });
-    await rebuildDerived(temporary, database, manifest.workspace_id);
+    await writeFile(join(temporary, "workspace.yaml"), `${stableJson({ schemaVersion: manifest.schema_version, workspaceId })}\n`);
+    const database = openWorkspaceDatabase(join(temporary, "state", "app.sqlite3"), { workspaceId });
+    await rebuildDerived(temporary, database, workspaceId);
     database.close();
     await rename(temporary, finalRoot);
     activated = true;
     const timestamp = new Date(0).toISOString();
-    manager.registry.insert({ workspaceId: manifest.workspace_id, displayName: "Restored workspace", rootKey: manifest.workspace_id, state: "active", schemaVersion: manifest.schema_version, createdAt: timestamp, updatedAt: timestamp });
-    return manager.get(manifest.workspace_id);
+    manager.registry.insert({ workspaceId, displayName: "Restored workspace", rootKey: workspaceId, state: "active", schemaVersion: manifest.schema_version, createdAt: timestamp, updatedAt: timestamp });
+    return manager.get(workspaceId);
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
     if (activated) await rm(finalRoot, { recursive: true, force: true });
