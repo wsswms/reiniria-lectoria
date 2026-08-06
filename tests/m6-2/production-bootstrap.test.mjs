@@ -83,6 +83,33 @@ test("production HTTP bootstrap executes document and workflow commands in the s
       body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
     });
     assert.equal(taskResponse.status, 200); assert.equal(taskResponse.json().data.task.state, "queued");
+    const runResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "translation:run-next", payload: { workspaceId: workspace.workspaceId } }),
+    });
+    assert.equal(runResponse.status, 200, JSON.stringify(runResponse.json()));
+    assert.equal(runResponse.json().data.status, "completed");
+    const completedTaskResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
+    });
+    assert.equal(completedTaskResponse.status, 200);
+    assert.equal(completedTaskResponse.json().data.task.state, "running");
+    const secondRunResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "translation:run-next", payload: { workspaceId: workspace.workspaceId } }),
+    });
+    assert.equal(secondRunResponse.status, 200); assert.equal(secondRunResponse.json().data.status, "completed");
+    const finalTaskResponse = await request(`${base}/api/v1/execute`, {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ command: "translation:task-get", payload: { workspaceId: workspace.workspaceId, taskId: queued.task.task.task_id } }),
+    });
+    assert.equal(finalTaskResponse.json().data.task.state, "completed");
+    const handle = manager.open(workspace.workspaceId);
+    try {
+      const snapshot = handle.database.prepare("SELECT provider_id AS providerId, model_id AS modelId, config_digest AS configDigest, snapshot_json AS snapshotJson FROM translation_attempt_config_snapshots WHERE workspace_id = ? AND task_id = ?").get(workspace.workspaceId, queued.task.task.task_id);
+      assert.equal(snapshot.providerId, "deepseek"); assert.equal(snapshot.modelId, "deepseek-v4-flash"); assert.match(snapshot.configDigest, /^sha256:[0-9a-f]{64}$/); assert.equal(JSON.parse(snapshot.snapshotJson).configDigest, snapshot.configDigest);
+    } finally { handle.database.close(); }
   } finally {
     await new Promise((resolve) => server.close(resolve)); manager.close(); await rm(root, { recursive: true, force: true });
   }

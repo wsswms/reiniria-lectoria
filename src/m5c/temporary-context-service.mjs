@@ -101,6 +101,11 @@ export class TemporaryContextService {
     const reservationId = input.flowBudgetReservationId ?? `${budgetCategory}:${input.idempotencyKey}`;
     const requestedUsage = input.estimatedUsage ?? { calls: segmentIds.length, inputTokens: estimatedTokens, outputTokens: segmentIds.length * 1_024,
       costMicrosCny: 0, costMicrosUsd: 0, durationMs: segmentIds.length * 30_000 };
+    const configSnapshot = { providerId: input.providerId, modelId: input.modelId, promptVersion: input.promptVersion ?? PROMPT_VERSION,
+      policyVersion: input.policyVersion ?? "m5c-translation-policy-v1", thinking: input.thinking === true,
+      temperature: input.temperature ?? null, toolNames: Array.isArray(input.toolNames) ? [...input.toolNames] : [] };
+    const configDigest = input.configDigest ?? contentDigest(configSnapshot);
+    if (!/^sha256:[0-9a-f]{64}$/.test(configDigest)) throw new TypeError("configDigest is invalid");
     this.budgets.reserve(workflowId, budgetCategory, reservationId, requestedUsage, { contextRevisionId: current.context.contextRevisionId });
     let task;
     try {
@@ -115,13 +120,16 @@ export class TemporaryContextService {
         for (const attempt of task.attempts) this.database.prepare("INSERT OR IGNORE INTO m5c_translation_attempt_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(this.workspaceId, attempt.attempt_id, attempt.task_id, workflowId, attempt.segment_id, current.context.contextRevisionId,
             current.decision.decisionId, current.context.planRevisionId, reservationId, contextDigests[attempt.segment_id], this.now().toISOString());
+        for (const attempt of task.attempts) this.database.prepare("INSERT OR IGNORE INTO translation_attempt_config_snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(this.workspaceId, attempt.attempt_id, attempt.task_id, workflowId, input.providerId, input.modelId, configDigest,
+            stableJson({ ...configSnapshot, configDigest }), this.now().toISOString());
       }).immediate();
     } catch (error) {
       if (task) { try { this.tasks.cancel(task.task.task_id); } catch {} }
       try { this.budgets.release(workflowId, reservationId, { reason: "enqueue-failed" }); } catch {}
       throw error;
     }
-    return Object.freeze({ task, contextRevisionId: current.context.contextRevisionId, contextDigests: Object.freeze(contextDigests), flowBudgetReservationId: reservationId, budgetCategory });
+    return Object.freeze({ task, contextRevisionId: current.context.contextRevisionId, contextDigests: Object.freeze(contextDigests), flowBudgetReservationId: reservationId, budgetCategory, configDigest });
   }
 
   get(workflowId) {
