@@ -5,5 +5,6 @@ import { ProviderConfigurationService } from "../provider/configuration-service.
 /** Create the LAN HTTP server with real workspace-scoped domain services. */
 export async function createProductionWorkflowHttpServer({ config, workspaceManager, health = () => ({ status: "ok", service: "lectoria" }) }) {
   if (!config || !workspaceManager) throw new TypeError("config and workspaceManager are required");
-  return createWorkflowHttpServer({ config, workspaceManager, providerConfiguration: new ProviderConfigurationService(config.dataRoot ?? workspaceManager.root), apiForWorkspace: createWorkspaceApiFactory(workspaceManager), health });
+  const providerConfiguration = new ProviderConfigurationService(config.dataRoot ?? workspaceManager.root);
+  return createWorkflowHttpServer({ config, workspaceManager, providerConfiguration, apiForWorkspace: createWorkspaceApiFactory(workspaceManager), health });
 }

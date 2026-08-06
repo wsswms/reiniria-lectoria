@@ -27,6 +27,8 @@ test("provider presets enforce model capabilities and compare-and-swap revisions
     state = await service.createSource({ sourceId: "deepseek-volc", displayName: "DeepSeek 第二来源", adapterId: "deepseek", modelId: "deepseek-v4-flash", credential: "secret-2" }, state.revision);
     state = await service.setPreset({ presetId: "translation-default", stage: "translation", sourceId: "deepseek-volc", thinking: true, temperature: 0.3, toolNames: ["number"] }, state.revision);
     assert.equal(state.presets[0].modelId, "deepseek-v4-flash"); assert.match(state.presets[0].configDigest, /^sha256:/);
+    const resolved = await service.resolvePreset({ stage: "translation", presetId: "translation-default" });
+    assert.equal(resolved.sourceId, "deepseek-volc"); assert.equal(resolved.thinking, true);
     await assert.rejects(() => service.setPreset({ presetId: "x", stage: "translation", sourceId: "deepseek-volc" }, state.revision - 1), ProviderConfigurationConflictError);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

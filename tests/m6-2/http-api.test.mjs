@@ -86,3 +86,13 @@ test("login attempts are bounded per remote address", async () => {
     assert.equal(limited.status, 429); assert.equal((await limited.json()).error.code, "LOGIN_RATE_LIMITED");
   });
 });
+
+test("HTTP translation enqueue resolves a registered StagePreset and ignores client provider fields", async () => {
+  const calls = [];
+  await withServer({ execute(command, payload) { calls.push({ command, payload }); return { ok: true }; } }, config, async (base) => {
+    const response = await request(`${base}/api/v1/execute`, { method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify({ command: "translation:enqueue", payload: { workflowId: "w", request: { presetId: "translation-default", providerId: "forged", modelId: "forged", idempotencyKey: "idempotent" } } }) });
+    assert.equal(response.status, 200);
+  }, { providerConfiguration: { async resolvePreset() { return { sourceId: "registered-source", modelId: "registered-model", thinking: true, temperature: 0.4, toolNames: ["number"], configDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }; } } });
+  assert.equal(calls[0].payload.request.providerId, "registered-source"); assert.equal(calls[0].payload.request.modelId, "registered-model");
+  assert.equal(calls[0].payload.request.configDigest, "sha256:" + "a".repeat(64)); assert.equal("presetId" in calls[0].payload.request, false);
+});

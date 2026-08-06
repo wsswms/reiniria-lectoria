@@ -63,6 +63,13 @@ export class ProviderConfigurationService {
     return await this.#write({ ...state, revision: state.revision + 1, presets: [...presets, preset] });
   }
 
+  async resolvePreset({ stage = "translation", presetId = null } = {}) {
+    const state = await this.#read();
+    const candidates = state.presets.filter((preset) => preset.stage === stage && (!presetId || preset.presetId === presetId));
+    if (candidates.length !== 1) throw new ProviderConfigurationConflictError(presetId ? "stage preset is not registered" : "a stage preset must be selected");
+    return Object.freeze({ ...candidates[0] });
+  }
+
   async #read() { try { return JSON.parse(await readFile(this.file, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; return baseState(); } }
   #cas(state, expectedRevision) { if (expectedRevision !== null && expectedRevision !== state.revision) throw new ProviderConfigurationConflictError("provider configuration revision conflict"); }
   async #write(state) { await mkdir(this.configDir, { recursive: true, mode: 0o700 }); const tmp = `${this.file}.${this.id()}.tmp`; await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 }); await rename(tmp, this.file); return this.list(); }
