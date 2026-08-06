@@ -30,5 +30,8 @@ test("authenticated workspace API exposes scoped knowledge proposal review witho
     assert.equal(listed.status, 200, JSON.stringify(listed.json())); assert.deepEqual(listed.json().data, []);
     const invalid = await execute("knowledge-proposal:list", { state: "unknown" });
     assert.equal(invalid.status, 422); assert.equal(invalid.json().error.code, "WORKFLOW_ERROR");
+    const preflight = await request(`${base}/api/v1/upgrade/preflight?workspaceId=${workspace.workspaceId}`, { headers: { cookie: headers.cookie } });
+    assert.equal(preflight.status, 200, JSON.stringify(preflight.json())); assert.equal(preflight.json().data.ready, true);
+    assert.equal(preflight.json().data.workspaces[0].activeTaskCount, 0);
   } finally { await new Promise((resolve) => server.close(resolve)); manager.close(); await rm(root, { recursive: true, force: true }); }
 });

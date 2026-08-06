@@ -27,6 +27,10 @@ export const backups = {
   restore: (backupId) => request("/api/v1/backups/restore", { method: "POST", body: JSON.stringify({ backupId }) }),
 };
 
+export const upgrades = {
+  preflight: (workspaceId = null) => request(`/api/v1/upgrade/preflight${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`),
+};
+
 export const workflow = {
   execute: (command, payload) => request("/api/v1/execute", { method: "POST", body: JSON.stringify({ command, payload }) }),
   importDocument: (workspaceId, input) => workflow.execute("document:import", { workspaceId, ...input }),

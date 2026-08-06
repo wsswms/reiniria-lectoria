@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createWorkspaceBackup, restoreWorkspaceBackup, validateWorkspaceBackup } from "../storage/backup.mjs";
+import { assertDatabaseIntegrity } from "../db/connection.mjs";
 
 const AUTH_COMMANDS = new Set([
   "document:confirm", "reimport:confirm-alignment", "reimport:confirm-semantic", "workflow:create",
@@ -148,6 +149,25 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
       } catch (error) {
         return jsonResponse(response, 503, { ok: false, error: { code: "DIAGNOSTICS_UNAVAILABLE", message: "diagnostics unavailable" } }, cors);
       }
+    }
+    if (request.method === "GET" && url.pathname === "/api/v1/upgrade/preflight") {
+      if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
+      if (!workspaceManager) return jsonResponse(response, 503, { ok: false, error: { code: "UPGRADE_PREFLIGHT_UNAVAILABLE", message: "workspace manager is unavailable" } }, cors);
+      const requestedWorkspaceId = url.searchParams.get("workspaceId");
+      try {
+        const records = requestedWorkspaceId ? [workspaceManager.get(requestedWorkspaceId)] : workspaceManager.list();
+        const workspaces = records.map((record) => {
+          const handle = workspaceManager.open(record.workspaceId);
+          try {
+            const integrity = assertDatabaseIntegrity(handle.database);
+            const activeTaskCount = handle.database.prepare("SELECT count(*) AS count FROM translation_tasks WHERE state IN ('queued','running','retry-wait','paused')").get().count;
+            return { workspaceId: record.workspaceId, schemaVersion: integrity.schemaVersion, expectedSchemaVersion: integrity.expectedSchemaVersion,
+              activeTaskCount, integrity: integrity.integrity, foreignKeyViolations: integrity.foreignKeyViolations,
+              ready: integrity.integrity === "ok" && integrity.foreignKeyViolations === 0 && integrity.schemaVersion === integrity.expectedSchemaVersion };
+          } finally { handle.database.close(); }
+        });
+        return jsonResponse(response, 200, { ok: true, data: { checkedAt: new Date().toISOString(), workspaces, ready: workspaces.every((item) => item.ready) } }, cors);
+      } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "UPGRADE_PREFLIGHT_FAILED", message: error.message } }, cors); }
     }
     if (request.method === "GET" && url.pathname === "/api/v1/session") {
       if (!user) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
