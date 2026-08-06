@@ -45,7 +45,19 @@ async function submitPlan() { if (!selected.value || !createdWorkflow.value) ret
 async function decidePlan(decision) { if (!selected.value || !createdWorkflow.value) return; busy.value = true; error.value = ""; try { createdWorkflow.value = await workflow.decidePlan(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId, createdWorkflow.value.planHead.version, decision); } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
 async function assembleContext() { if (!selected.value || !createdWorkflow.value) return; busy.value = true; error.value = ""; try { contextState.value = await workflow.assembleContext(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId); } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
 async function decideContext(decision) { if (!selected.value || !contextState.value) return; busy.value = true; error.value = ""; try { contextState.value = await workflow.decideContext(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId, contextState.value.head.version, decision); } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
-async function enqueueTranslation() { if (!selected.value || !createdWorkflow.value || !contextState.value || !presetId.value.trim()) return; busy.value = true; error.value = ""; try { const result = await workflow.enqueueTranslation(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId, { presetId: presetId.value.trim(), stage: "translation", idempotencyKey: crypto.randomUUID() }); taskState.value = result.task; } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
+async function enqueueTranslation() {
+  if (!selected.value || !createdWorkflow.value || !contextState.value || !presetId.value.trim()) return;
+  busy.value = true; error.value = "";
+  try {
+    const bundle = await workflow.getBundle(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId);
+    const next = bundle.segments.find((item) => !item.text);
+    if (!next) throw new Error("没有待翻译的分段");
+    const result = await workflow.enqueueTranslation(selected.value.workspaceId, createdWorkflow.value.workflow.workflowId, {
+      presetId: presetId.value.trim(), stage: "translation", segmentIds: [next.segmentId], idempotencyKey: crypto.randomUUID(),
+    });
+    taskState.value = result.task;
+  } catch (cause) { error.value = cause.message; } finally { busy.value = false; }
+}
 async function runOfflineTranslation() { if (!selected.value || !taskState.value) return; busy.value = true; error.value = ""; try { offlineRun.value = await workflow.runNextOffline(selected.value.workspaceId); taskState.value = await workflow.getTask(selected.value.workspaceId, taskState.value.taskId); } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
 async function createProviderSource() { if (!sourceId.value.trim() || !credential.value.trim()) return; busy.value = true; error.value = ""; try { providerState.value = await providerConfig.createSource({ sourceId: sourceId.value.trim(), displayName: sourceName.value.trim() || sourceId.value.trim(), adapterId: adapterId.value, modelId: modelId.value, credential: credential.value, expectedRevision: providerState.value.revision }); sourceId.value = ""; sourceName.value = ""; credential.value = ""; } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
 async function savePreset() { if (!presetId.value.trim() || !presetSourceId.value.trim()) return; busy.value = true; error.value = ""; try { providerState.value = await providerConfig.setPreset({ presetId: presetId.value.trim(), stage: presetStage.value, sourceId: presetSourceId.value, thinking: presetThinking.value, temperature: Number(presetTemperature.value), toolNames: presetTools.value.split(",").map((item) => item.trim()).filter(Boolean), expectedRevision: providerState.value.revision }); } catch (cause) { error.value = cause.message; } finally { busy.value = false; } }
@@ -86,7 +98,7 @@ onMounted(restore);
                 <template v-else><n-tag type="info">Context：{{ contextState.head.state }}</n-tag><n-space v-if="contextState.head.state === 'pending-user'"><n-button type="success" :loading="busy" @click="decideContext('approved')">批准 Context</n-button><n-button secondary :loading="busy" @click="decideContext('rejected')">退回 Context</n-button></n-space><n-space v-if="contextState.head.state === 'approved' && !taskState"><n-select v-model:value="presetId" :options="translationPresets" placeholder="选择翻译 StagePreset" style="width:280px" /><n-button type="primary" :loading="busy" :disabled="!translationPresets.length" @click="enqueueTranslation">创建翻译任务</n-button></n-space><n-tag v-if="taskState" type="warning">任务：{{ taskState.task?.state ?? taskState.state }}</n-tag></template>
               </n-space>
             </n-card>
-            <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" :translation-request="{ presetId, stage: 'translation' }" />
+            <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" :translation-request="{ presetId, stage: 'translation' }" @candidate-selected="taskState = null" @segment-edited="taskState = null" />
             <KnowledgePanel v-if="selected" :workspace-id="selected.workspaceId" />
             <ProposalPanel v-if="selected" :workspace-id="selected.workspaceId" />
             <BackupPanel v-if="selected" :workspace-id="selected.workspaceId" @restored="loadWorkspaces" />
