@@ -16,6 +16,8 @@ import { DeterministicFakeProvider } from "../provider/fake-provider.mjs";
 import { PricingBudgetService } from "../provider/cost-budget.mjs";
 import { FtsRetriever } from "../knowledge/fts-retriever.mjs";
 import { ManualKnowledgeService } from "../knowledge/manual-knowledge-service.mjs";
+import { KnowledgeProposalService } from "../search/knowledge-proposal-service.mjs";
+import { KnowledgeIterationService } from "../knowledge/iteration-service.mjs";
 import { randomBytes } from "node:crypto";
 import { CapabilityAuthority } from "../runner/capability.mjs";
 import { invokeProviderThroughRunner } from "../runner/provider-runner.mjs";
@@ -60,6 +62,8 @@ export function createWorkspaceApiFactory(workspaceManager, {
     const fts = new FtsRetriever(handle.root, handle.database, handle.record.workspaceId);
     const retriever = { search: async (request) => { try { fts.manifest(); } catch { await fts.rebuild(); } return fts.search(request); }, rebuild: () => fts.rebuild(), manifest: () => fts.manifest() };
     const manualKnowledge = new ManualKnowledgeService({ root: handle.root, database: handle.database, workspaceId: handle.record.workspaceId, retriever });
+    const knowledgeProposals = new KnowledgeProposalService(handle.database, handle.record.workspaceId);
+    const knowledgeIterations = new KnowledgeIterationService(handle.root, handle.database, handle.record.workspaceId, { facts: manualKnowledge.facts, retriever, proposals: knowledgeProposals });
     const offlineBudgets = new PricingBudgetService(handle.database, handle.record.workspaceId);
     const pricingVersion = translationMode === "real" ? realPricingVersion : "m6-fake-v1";
     const policyVersion = translationMode === "real" ? "m6-real-policy" : "m6-fake-policy";
@@ -90,7 +94,7 @@ export function createWorkspaceApiFactory(workspaceManager, {
       }
       return baseExecutor.executeNext();
     } };
-    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, quality, reviews, exports, retriever, manualKnowledge });
+    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, quality, reviews, exports, retriever, manualKnowledge, knowledgeProposals, knowledgeIterations });
     return Object.freeze({ api, close: () => handle.database.close() });
   };
 }

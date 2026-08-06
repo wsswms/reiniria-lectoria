@@ -152,6 +152,16 @@ export class KnowledgeProposalService {
         version: row.headVersion, state: row.state, updatedAt: row.updatedAt }), current: status.current, staleReason: status.reason });
   }
 
+  list({ state = null, limit = 100 } = {}) {
+    if (state !== null && !new Set(["draft", "approved", "rejected"]).has(state)) throw new TypeError("proposal state is invalid");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new TypeError("proposal limit is invalid");
+    const rows = this.database.prepare(`SELECT proposal_id AS proposalId
+      FROM knowledge_proposal_heads
+      WHERE workspace_id = ? ${state ? "AND state = ?" : ""}
+      ORDER BY updated_at DESC, proposal_id DESC LIMIT ?`).all(...(state ? [this.workspaceId, state, limit] : [this.workspaceId, limit]));
+    return Object.freeze(rows.map(({ proposalId }) => this.get(proposalId)));
+  }
+
   currentStatus(rowOrId) {
     const row = typeof rowOrId === "string" ? this.get(rowOrId) : rowOrId;
     const revision = row.revision ?? { proposalPolicyVersion: row.proposalPolicyVersion, operation: row.operation,

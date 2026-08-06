@@ -4,6 +4,7 @@ import { NAlert, NButton, NCard, NCheckbox, NConfigProvider, NDivider, NEmpty, N
 import { session, workspaces, workflow, providerConfig } from "./api.js";
 import TranslationWorkbench from "./TranslationWorkbench.vue";
 import KnowledgePanel from "./KnowledgePanel.vue";
+import ProposalPanel from "./ProposalPanel.vue";
 import BackupPanel from "./BackupPanel.vue";
 
 const theme = inject("theme");
@@ -87,6 +88,7 @@ onMounted(restore);
             </n-card>
             <TranslationWorkbench v-if="createdWorkflow && selected" :workspace-id="selected.workspaceId" :workflow-state="createdWorkflow" :task-state="taskState" :translation-request="{ presetId, stage: 'translation' }" />
             <KnowledgePanel v-if="selected" :workspace-id="selected.workspaceId" />
+            <ProposalPanel v-if="selected" :workspace-id="selected.workspaceId" />
             <BackupPanel v-if="selected" :workspace-id="selected.workspaceId" @restored="loadWorkspaces" />
           </n-space>
         </template>

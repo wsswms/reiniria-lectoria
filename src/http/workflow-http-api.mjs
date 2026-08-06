@@ -10,6 +10,7 @@ const AUTH_COMMANDS = new Set([
   "candidate:add", "candidate:select", "working-copy:edit", "warning:confirm",
   "quality:run", "quality:get", "quality:confirm-warning", "qa:decide", "qa:retranslate", "review", "approve", "internet:create", "internet:fetch",
   "proposal:create", "proposal:revise", "proposal:decide", "proposal:apply",
+  "knowledge-proposal:decide", "knowledge-proposal:apply",
   "translation:run-next",
   "knowledge:fact-create", "knowledge:fact-revise", "knowledge:fact-state",
 ]);
@@ -67,7 +68,9 @@ function cookieValue(header, name) {
 function jsonResponse(response, status, body, headers = {}) {
   const encoded = Buffer.from(JSON.stringify(body));
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": encoded.length,
-    "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...headers });
+    "cache-control": "no-store", "x-content-type-options": "nosniff", "x-frame-options": "DENY",
+    "content-security-policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()", "referrer-policy": "no-referrer", ...headers });
   response.end(encoded);
 }
 
@@ -243,7 +246,9 @@ export function createWorkflowHttpHandler({ api, apiForWorkspace = null, config,
         const selected = scoped?.api ?? scoped; close = scoped?.close ?? close;
         const artifact = await selected.execute("export:download", { workspaceId: decodeURIComponent(downloadMatch[1]), exportId: decodeURIComponent(downloadMatch[2]) });
         const contentTypes = { markdown: "text/markdown; charset=utf-8", html: "text/html; charset=utf-8", text: "text/plain; charset=utf-8", canonical: "application/json; charset=utf-8" };
-        response.writeHead(200, { ...cors, "content-type": contentTypes[artifact.format] ?? "application/octet-stream", "content-disposition": `attachment; filename="${artifact.filename}"`, "content-length": artifact.content.length });
+        response.writeHead(200, { ...cors, "cache-control": "no-store", "x-content-type-options": "nosniff", "x-frame-options": "DENY",
+          "content-security-policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'", "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "no-referrer", "content-type": contentTypes[artifact.format] ?? "application/octet-stream", "content-disposition": `attachment; filename="${artifact.filename}"`, "content-length": artifact.content.length });
         response.end(artifact.content); return;
       } catch (error) { return jsonResponse(response, error.statusCode ?? 422, { ok: false, error: { code: error.code ?? "EXPORT_ERROR", message: error.message } }, cors); }
       finally { close(); }

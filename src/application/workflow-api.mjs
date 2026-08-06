@@ -1,6 +1,6 @@
 export class WorkflowApi {
   constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, quality = null, reviews, exports,
-    retriever = null, integrity = null, manualKnowledge = null }) {
+    retriever = null, integrity = null, manualKnowledge = null, knowledgeProposals = null, knowledgeIterations = null }) {
     this.imports = imports;
     this.reimports = reimports;
     this.flowPlans = flowPlans;
@@ -21,6 +21,8 @@ export class WorkflowApi {
     this.retriever = retriever;
     this.integrity = integrity;
     this.manualKnowledge = manualKnowledge;
+    this.knowledgeProposals = knowledgeProposals;
+    this.knowledgeIterations = knowledgeIterations;
   }
 
   execute(command, payload) {
@@ -114,6 +116,10 @@ export class WorkflowApi {
       case "knowledge:fact-create": return this.manualKnowledge.create(payload, payload.actor);
       case "knowledge:fact-revise": return this.manualKnowledge.revise(payload, payload.actor);
       case "knowledge:fact-state": return this.manualKnowledge.setState(payload, payload.actor);
+      case "knowledge-proposal:list": return this.knowledgeProposals.list(payload);
+      case "knowledge-proposal:get": return this.knowledgeProposals.get(payload.proposalId);
+      case "knowledge-proposal:decide": return this.knowledgeProposals.decide(payload.proposalId, payload.expectedVersion, payload.decision, payload.actor);
+      case "knowledge-proposal:apply": return this.knowledgeIterations.apply(payload.proposalId, payload.actor);
       case "knowledge:diagnose": return this.integrity.diagnose();
       case "knowledge:repair-derived": return this.integrity.repairDerived();
       default: throw new TypeError("unknown workflow command");

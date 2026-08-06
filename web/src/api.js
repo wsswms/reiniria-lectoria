@@ -73,4 +73,8 @@ export const knowledge = {
   create: (workspaceId, input) => workflow.execute("knowledge:fact-create", { workspaceId, ...input }),
   revise: (workspaceId, input) => workflow.execute("knowledge:fact-revise", { workspaceId, ...input }),
   setState: (workspaceId, input) => workflow.execute("knowledge:fact-state", { workspaceId, ...input }),
+  proposals: (workspaceId, input = {}) => workflow.execute("knowledge-proposal:list", { workspaceId, ...input }),
+  proposal: (workspaceId, proposalId) => workflow.execute("knowledge-proposal:get", { workspaceId, proposalId }),
+  decideProposal: (workspaceId, proposalId, expectedVersion, decision) => workflow.execute("knowledge-proposal:decide", { workspaceId, proposalId, expectedVersion, decision }),
+  applyProposal: (workspaceId, proposalId) => workflow.execute("knowledge-proposal:apply", { workspaceId, proposalId }),
 };

@@ -55,6 +55,10 @@ test("login creates an HttpOnly session cookie and logout revokes it", async () 
     const csrfToken = (await login.json()).data.csrfToken;
     const session = await request(`${base}/api/v1/session`, { headers: { cookie } });
     assert.equal(session.status, 200);
+    assert.equal(session.headers["x-content-type-options"], "nosniff");
+    assert.equal(session.headers["x-frame-options"], "DENY");
+    assert.match(session.headers["content-security-policy"], /frame-ancestors 'none'/);
+    assert.equal(session.headers["referrer-policy"], "no-referrer");
     const deniedLogout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie } });
     assert.equal(deniedLogout.status, 403); assert.equal((await deniedLogout.json()).error.code, "CSRF_DENIED");
     const logout = await request(`${base}/api/v1/session/logout`, { method: "POST", headers: { cookie, "x-csrf-token": csrfToken } });
