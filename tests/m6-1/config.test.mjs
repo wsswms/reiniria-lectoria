@@ -4,7 +4,7 @@ import { loadHttpConfig } from "../../src/runtime/config.mjs";
 
 test("HTTP config fails closed without an auth token", () => {
   assert.throws(() => loadHttpConfig({ NODE_ENV: "production" }), /AUTH_TOKEN/);
-  assert.throws(() => loadHttpConfig({ NODE_ENV: "production", LECTORIA_ALLOW_INSECURE: "true" }), /insecure HTTP/);
+  assert.throws(() => loadHttpConfig({ LECTORIA_ALLOW_INSECURE: "true" }), /AUTH_TOKEN/);
 });
 
 test("HTTP config defaults to loopback and validates bounded settings", () => {

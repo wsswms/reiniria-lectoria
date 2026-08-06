@@ -41,11 +41,9 @@ export function createWorkflowHttpHandler({ api, config, health = () => ({ statu
     const url = new URL(request.url, "http://localhost");
     if (request.method === "GET" && url.pathname === "/healthz") return jsonResponse(response, 200, health(), cors);
     if (request.method !== "POST" || url.pathname !== "/api/v1/execute") return jsonResponse(response, 404, { ok: false, error: { code: "NOT_FOUND", message: "route not found" } }, cors);
-    if (config.authToken) {
-      const authorization = request.headers.authorization ?? "";
-      const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-      if (!sameSecret(supplied, config.authToken)) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
-    }
+    const authorization = request.headers.authorization ?? "";
+    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (!sameSecret(supplied, config.authToken)) return jsonResponse(response, 401, { ok: false, error: { code: "UNAUTHENTICATED", message: "authentication required" } }, cors);
     try {
       const input = await readJson(request, config.maxBodyBytes);
       if (!input || typeof input.command !== "string" || !input.payload || typeof input.payload !== "object") throw Object.assign(new Error("command and payload are required"), { statusCode: 400, code: "INVALID_REQUEST" });
