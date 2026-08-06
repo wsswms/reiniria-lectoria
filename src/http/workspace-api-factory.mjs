@@ -11,6 +11,8 @@ import { TemporaryContextService } from "../m5c/temporary-context-service.mjs";
 import { FlowRecoveryService } from "../m5c/flow-recovery-service.mjs";
 import { M5CQAService } from "../m5c/qa-service.mjs";
 import { M5CRemediationService } from "../m5c/remediation-service.mjs";
+import { TranslationExecutor } from "../provider/translation-executor.mjs";
+import { DeterministicFakeProvider } from "../provider/fake-provider.mjs";
 
 /**
  * Build the application facade for one trusted workspace. The HTTP layer only
@@ -34,7 +36,11 @@ export function createWorkspaceApiFactory(workspaceManager) {
     const recovery = new FlowRecoveryService(handle.database, handle.record.workspaceId, { contexts, tasks: contexts.tasks, budgets: contexts.budgets });
     const m5cQa = new M5CQAService(handle.database, handle.record.workspaceId, { workCopies });
     const remediation = new M5CRemediationService(handle.database, handle.record.workspaceId, { contexts, budgets: contexts.budgets });
-    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, recovery, m5cQa, remediation, workCopies, validation, reviews, exports });
+    const fakeProvider = new DeterministicFakeProvider({ id: "deepseek" });
+    const translationExecutor = new TranslationExecutor(handle.database, handle.record.workspaceId, {
+      invokeProvider: fakeProvider.invoke.bind(fakeProvider), credentialRef: "fixture:m6-offline", pricingVersion: "m6-fake-v1", workerId: "m6-fake-runner",
+    });
+    const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, reviews, exports });
     return Object.freeze({ api, close: () => handle.database.close() });
   };
 }

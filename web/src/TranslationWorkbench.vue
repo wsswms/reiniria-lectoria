@@ -14,6 +14,7 @@ async function confirmWarning(item) { try { validation.value = await workflow.co
 async function review() { try { await workflow.review(props.workspaceId, props.workflowState.workflow.workflowId, validation.value.validationRunId, props.workflowState.workflow.version); } catch (cause) { error.value = cause.message; } }
 async function approve() { try { await workflow.approve(props.workspaceId, props.workflowState.workflow.workflowId, validation.value.validationRunId, props.workflowState.workflow.version); } catch (cause) { error.value = cause.message; } }
 async function exportFile(format) { try { exportRecord.value = await workflow.export(props.workspaceId, props.workflowState.workflow.workflowId, validation.value.validationRunId, format); } catch (cause) { error.value = cause.message; } }
+async function runOffline() { try { task.value = await workflow.runNextOffline(props.workspaceId); } catch (cause) { error.value = cause.message; } }
 async function poll() { if (!task.value?.taskId) return; try { task.value = await workflow.getTask(props.workspaceId, task.value.taskId); if (["completed", "failed", "canceled", "unknown-outcome"].includes(task.value.state)) { clearInterval(timer); timer = null; await load(); } } catch (cause) { error.value = cause.message; } }
 function startPoll() { if (timer) clearInterval(timer); timer = setInterval(poll, 1500); }
 watch(() => props.workflowState.workflow.workflowId, () => { bundle.value = null; validation.value = null; load().catch((cause) => { error.value = cause.message; }); }, { immediate: true });
@@ -28,6 +29,5 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
     <n-card title="Validator、审核与导出"><n-button type="primary" @click="validate">运行确定性 Validator</n-button><n-list v-if="validation?.findings?.length" bordered><n-list-item v-for="item in validation.findings" :key="item.findingId">{{ item.severity }} · {{ item.code }}<n-button v-if="item.severity === 'warning'" size="small" @click="confirmWarning(item)">确认警告</n-button></n-list-item></n-list><n-space v-if="validation"><n-button @click="review">人工审核完成</n-button><n-button type="success" @click="approve">批准导出</n-button><n-button @click="exportFile('markdown')">导出 Markdown</n-button><n-button @click="exportFile('canonical')">导出 Canonical</n-button></n-space><n-alert v-if="exportRecord" type="success" :title="`导出完成：${exportRecord.filename}`" /></n-card>
   </n-space>
 </template>
-
 
 

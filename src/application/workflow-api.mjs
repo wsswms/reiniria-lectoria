@@ -1,11 +1,12 @@
 export class WorkflowApi {
-  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
+  constructor({ imports, reimports, flowPlans, planner = null, contexts = null, translationExecutor = null, m5cQa = null, modelQa = null, remediation = null, recovery = null, disposition = null, research = null, workCopies, validation, reviews, exports,
     retriever = null, integrity = null }) {
     this.imports = imports;
     this.reimports = reimports;
     this.flowPlans = flowPlans;
     this.planner = planner;
     this.contexts = contexts;
+    this.translationExecutor = translationExecutor;
     this.m5cQa = m5cQa;
     this.modelQa = modelQa;
     this.remediation = remediation;
@@ -62,6 +63,10 @@ export class WorkflowApi {
       case "context:decide": return this.contexts.decide(payload.workflowId, payload.expectedVersion, payload.decision, payload.actor);
       case "translation:enqueue": return this.contexts.enqueueTranslation(payload.workflowId, payload.request);
       case "translation:task-get": return this.contexts.tasks.getTask(payload.taskId);
+      case "translation:run-next": {
+        if (!this.translationExecutor) throw new TypeError("translation executor is unavailable");
+        return this.translationExecutor.executeNext();
+      }
       case "qa:run": {
         const options = payload.options ?? {};
         if (options.modelFindings !== undefined || options.layers?.includes("model")) throw new TypeError("model QA must use the controlled model QA executor");

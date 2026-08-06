@@ -32,6 +32,7 @@ export const workflow = {
   decideContext: (workspaceId, workflowId, expectedVersion, decision) => workflow.execute("context:decide", { workspaceId, workflowId, expectedVersion, decision }),
   enqueueTranslation: (workspaceId, workflowId, request) => workflow.execute("translation:enqueue", { workspaceId, workflowId, request }),
   getTask: (workspaceId, taskId) => workflow.execute("translation:task-get", { workspaceId, taskId }),
+  runNextOffline: (workspaceId) => workflow.execute("translation:run-next", { workspaceId }),
   getBundle: (workspaceId, workflowId) => workflow.execute("working-copy:get", { workspaceId, workflowId }),
   listCandidates: (workspaceId, workflowId, segmentId) => workflow.execute("candidate:list", { workspaceId, workflowId, segmentId }),
   selectCandidate: (workspaceId, workflowId, segmentId, candidateId, expectedHeadVersion) => workflow.execute("candidate:select", { workspaceId, workflowId, segmentId, candidateId, expectedHeadVersion }),
