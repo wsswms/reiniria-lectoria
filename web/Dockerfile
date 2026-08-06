@@ -1,5 +1,7 @@
 FROM node@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90 AS build
 WORKDIR /app
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY index.html vite.config.js ./

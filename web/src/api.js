@@ -1,8 +1,9 @@
 let csrfToken = null;
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request(path, options = {}) {
   const method = options.method ?? "GET";
-  const response = await fetch(path, { credentials: "include", headers: { "content-type": "application/json", ...(method !== "GET" && csrfToken ? { "x-csrf-token": csrfToken } : {}), ...(options.headers ?? {}) }, ...options });
+  const response = await fetch(`${API_BASE}${path}`, { credentials: "include", headers: { "content-type": "application/json", ...(method !== "GET" && csrfToken ? { "x-csrf-token": csrfToken } : {}), ...(options.headers ?? {}) }, ...options });
   const result = await response.json().catch(() => ({ ok: false, error: { message: "服务器返回了无效响应" } }));
   if (!response.ok || !result.ok) throw Object.assign(new Error(result.error?.message ?? "请求失败"), { code: result.error?.code, status: response.status });
   return result.data;

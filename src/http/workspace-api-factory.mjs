@@ -42,16 +42,18 @@ export function createWorkspaceApiFactory(workspaceManager) {
     const fts = new FtsRetriever(handle.root, handle.database, handle.record.workspaceId);
     const retriever = { search: async (request) => { try { fts.manifest(); } catch { await fts.rebuild(); } return fts.search(request); }, rebuild: () => fts.rebuild(), manifest: () => fts.manifest() };
     const manualKnowledge = new ManualKnowledgeService({ root: handle.root, database: handle.database, workspaceId: handle.record.workspaceId, retriever });
-    const fakeProvider = new DeterministicFakeProvider({ id: "deepseek" });
     const offlineBudgets = new PricingBudgetService(handle.database, handle.record.workspaceId);
     if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = 'deepseek' AND model_id = 'deepseek-v4-flash' AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId)) offlineBudgets.addPricing({ providerId: "deepseek", modelId: "deepseek-v4-flash", pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
     if (!handle.database.prepare("SELECT 1 FROM budget_policy_snapshots WHERE workspace_id = ? AND policy_version = 'm6-fake-policy'").get(handle.record.workspaceId)) offlineBudgets.addPolicy({ policyVersion: "m6-fake-policy", currency: "CNY", softLimitMicros: 100_000_000, hardLimitMicros: 100_000_000, unknownPriceAction: "block" });
     const baseExecutor = new TranslationExecutor(handle.database, handle.record.workspaceId, {
-      invokeProvider: fakeProvider.invoke.bind(fakeProvider), credentialRef: "fixture:m6-offline", pricingVersion: "m6-fake-v1", workerId: "m6-fake-runner", budgets: offlineBudgets,
+      invokeProvider: (request) => new DeterministicFakeProvider({ id: request.providerId }).invoke(request), credentialRef: "fixture:m6-offline", pricingVersion: "m6-fake-v1", workerId: "m6-fake-runner", budgets: offlineBudgets,
     });
     const translationExecutor = { executeNext: async () => {
-      const pending = handle.database.prepare("SELECT task_id AS taskId FROM translation_tasks WHERE workspace_id = ? AND state IN ('queued','running') AND NOT EXISTS (SELECT 1 FROM task_budget_assignments WHERE workspace_id = translation_tasks.workspace_id AND task_id = translation_tasks.task_id) ORDER BY created_at LIMIT 1").get(handle.record.workspaceId);
-      if (pending) offlineBudgets.assignTask(pending.taskId, "m6-fake-policy");
+      const pending = handle.database.prepare("SELECT task.task_id AS taskId, attempt.provider_id AS providerId, attempt.model_id AS modelId FROM translation_tasks task JOIN translation_attempts attempt ON attempt.workspace_id = task.workspace_id AND attempt.task_id = task.task_id WHERE task.workspace_id = ? AND task.state IN ('queued','running') AND attempt.state IN ('queued','leased','running') AND NOT EXISTS (SELECT 1 FROM task_budget_assignments WHERE workspace_id = task.workspace_id AND task_id = task.task_id) ORDER BY task.created_at, attempt.created_at LIMIT 1").get(handle.record.workspaceId);
+      if (pending) {
+        if (!handle.database.prepare("SELECT 1 FROM pricing_snapshots WHERE workspace_id = ? AND provider_id = ? AND model_id = ? AND pricing_version = 'm6-fake-v1'").get(handle.record.workspaceId, pending.providerId, pending.modelId)) offlineBudgets.addPricing({ providerId: pending.providerId, modelId: pending.modelId, pricingVersion: "m6-fake-v1", currency: "CNY", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, source: "m6-offline-fixture" });
+        offlineBudgets.assignTask(pending.taskId, "m6-fake-policy");
+      }
       return baseExecutor.executeNext();
     } };
     const api = new WorkflowApi({ imports, reimports, flowPlans, contexts, translationExecutor, recovery, m5cQa, remediation, workCopies, validation, reviews, exports, retriever, manualKnowledge });
